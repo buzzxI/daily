@@ -1,0 +1,7625 @@
+如果 gcc 又包含了奇怪的没看过的参数，就到手册中查一查：[gcc(1) - Linux manual page (man7.org)](https://man7.org/linux/man-pages/man1/gcc.1.html)
+
+>   linux 中的其他 "预装软件" 基本上都有手册, 在 linux 中直接 man 查确实没有网页方便...
+
+# 信息的表示和处理
+
+8 bit 作为一个 Byte 是最小的可寻址的内存单元，所以在内存中的一个地址对应了 1 Btye(8 bits)
+
+内存对于程序而言就是一个大字节数组，内存中的每个字节都具有自己的地址，所有可能的地址集合称为虚拟地址空间
+
+在 c 中指针的值其实是指针指向的某个存储块的第一个字节的虚拟地址
+
+字长表明了指针数据的标称大小(nominal size)
+
+>   我这里理解的标称大小为数据最小单元
+
+32 位的系统决定了虚拟地址空间的大小上限为 $2^{32}$，即具有 4G 个不同的地址，可以表示最多 4 GBytes 的数据
+
+>   从 0x00000000 到 0xFFFFFFFF
+>
+>   当变为 64 位 的系统，最多具有 16E 个不同的地址 (K -> M -> G -> T -> P -> E)
+
+因为 64 位机器的地址空间更大，理论上 64 位的设备是可以运行 32 位的程序的
+
+变量在内存中占用连续的空间存储，表示变量的地址为所有字节中最小的地址，比如 int 类型变量 x，&x = 0x100；因为 int 类型占用 4 Bytes，所以实际变量 x 占用的内存地址为：0x100、0x101、0x102、0x103 四个位置
+
+## 大端法和小端法
+
+对于一个 w 位的整数(w 可被 8 整除)，可以将其表示为：\[$x_{w - 1}, x_{w - 2}...x_2,x_1,x_0$](每一位不是 0 就是 1)；
+
+其高八位为：\[$x_{w - 1},x_{w - 2}... x_{w - 8}$](最高位的字节)；其低八位为：\[$x_7, x_6...x_0$](最低位的字节)
+
+有的机器在内存中高地址表示高位字节，低地址表示低位字节，称之为小端法；而与之相反的成为大端法
+
+举例来说：int 类型的变量 x 有 &x = 0x100，根据之前的讨论，可知 0x100 为其内存表示中最小的地址，假如 x = 0x01234567，那么大端法和小端法分别表示为：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/big_endian_vs_litttle_endian.png)
+
+>   注意在上述 0x01234567 中 67 是低 Byte
+>
+>   java 和 c 都是小端序
+
+给出一个用来查看变量在程序中的字节表示的程序
+
+```java
+#include <stdio.h>
+
+typedef unsigned char *byte_pointer;
+
+void show_bytes(byte_pointer start, size_t len) {
+    int i = 0;
+    while (i < len) {
+        // .2x 保证输出一定是两位的十六进制数据
+        // 因为 byte_pointer 是 char 类型的指针，所以一次打印一个字节
+        printf("%.2x\n", start[i]);
+        i++;
+    }
+    printf("\n");
+}
+void show_int(int val) {
+    show_bytes((byte_pointer) &val, sizeof(int));
+}
+
+void show_float(float val) {
+    show_bytes((byte_pointer) &val, sizeof(float));
+}
+
+void show_pointer(void *val) {
+    show_bytes((byte_pointer) &val, sizeof(void *));
+}
+```
+
+这个程序用来打印不同类型的 val 在内存中的十六进制表示，在不同的机器上运行时，还能看出不同系统的数据存储表示
+
+测试程序如下：
+
+```c
+int main(void) {
+    test(12345);
+    return 0;
+}
+
+void test(int val) {
+    show_int(val);
+    show_float((float)val);
+    show_pointer(&val);
+}
+```
+
+打印输出如下：
+
+```shell
+buzz@buzz:~/csapp/pointer_test$ ./test
+39
+30
+00
+00
+
+00
+e4
+40
+46
+
+5c
+03
+23
+12
+ff
+7f
+00
+00
+```
+
+输入数据 12345 其十六进制表示为：0x3039，故可以看到，在 ubuntu-18.04 下使用的是小端序
+
+此外还能看到 float 类型的二进制表示和 int 类型有很大区别
+
+至于 int * 类型，毕竟是指针，在 64 位系统下，其指针大小占据 8 Bytes
+
+特别的对于字符串类型，因为 c 默认进行字符串编码的时候会把 null(即 '\0') 放到字符串结尾，运行以下程序：
+
+```c
+void test(int val) {
+    const char *s = "12345";
+    show_bytes((byte_pointer)s, 6);
+}
+```
+
+打印输出如下：
+
+```shell
+31
+32
+33
+34
+35
+00
+```
+
+要注意的是，无论是大端序还是小端序，打印输出的结果都是一样的，这说明字符串文本的平台独立性更强
+
+>   要注意的是上面我们是手动选择的长度参数 6，如果上面变成了 strlen(s) 这个函数默认会将结尾的字符 '\0' 从字符出中剔除
+>
+>   此外如果需要使用方法 strlen(s) 需要引入头文件 string.h
+
+## 布尔代数
+
+有一个神奇的程序使用了位运算实现了交换操作
+
+```c
+void swap(int *x, int *y) {
+    *y = *x ^ *y;
+    *x = *x ^ *y;
+    *y = *x ^ *y;
+}
+```
+
+>   一点点看
+>
+>   第一步：$y = x \bigoplus y$
+>
+>   第二步：$x = x \bigoplus (x \bigoplus y) = y$
+>
+>   第三步：$y = y\bigoplus (x\bigoplus y) = x$
+>
+>   此时完成了交换操作，这个方法相比于一般的方法，不需要定义第三个变量 tmp，直接就完成了交换，看起来更加高级，效率其实没什么差别
+
+移位运算是可结合的，比如：x << i << j 等价于：(x << i) << j
+
+相比于左移，一般而言，具有两种右移，逻辑右移和算数右移：逻辑右移 k 位将在高位补充 0，而算数右移 k 位会补充最高位(0 或者 1)
+
+因为对于有符号数，最高位表示是符号位，此时算出右移是有意义的(如果是负数，最高位补充 1 不会导致负数突然变为正数，此外还能保证右移的性质，即右移 1 位表示当前数字除 2)，但是对于无符号数，算数右移看起来就很奇怪了
+
+>   在 java 中 >> 表示算数右移，而 >>> 表示逻辑右移
+>
+>   此外当移位超出了当前类型变量的上限时，会进行取模移位，比如定义 int a = 1，然后 a << 32 此时就相当于 a << (32) % 32 = a << 0 = a
+
+## 数据表示
+
+### 整数类型
+
+#### 无符号数和有符号数
+
+在 c 中如果运算符两侧，一个为有符号数，一个为无符号数，那么在进行运算时，会隐式的将有符号数转化为无符号数进行运算
+
+这一点对于 < 和 > 两种运算符的影响很大，如果不知道这个规则的话，可能出现错误的判断
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/signed_to_unsigned.png)
+
+#### 位扩展
+
+在 c 中对整数进行位扩展，会根据整数类型的不同，分为零扩展(无符号数)和符号扩展(符号数)，简单来说就是无符号数进行位扩展，高位只需要补充 0 即可，而对于符号数，高位需要补充 0 或 1 取决于符号数的正负(如果是负数，则需要在高位填充 1)
+
+在 c 中如果同时出现有符号数和无符号数之间的相互转化和位扩展行为，那么默认会先进行位扩展，然后再完成有符号数和无符号数之间的转化(位扩展的优先级更高)，举例来说：
+
+```c
+int main(void) {
+    short a = -12345; // 0xcfc7
+    unsigned b = a;
+    printf("b = %u\n", b); // b = ffffcfc7
+}
+```
+
+第三行为 b 赋值时，首先需要对 a 进行位扩展，得到 0xffffcfc7，然后再变为 unsigned 类型
+
+#### 加法
+
+*   无符号数：在 c 中加法溢出并不会报错，不过可以通过结果判断加法是否发生了溢出，对于字长为 w 的整数 a 和 b，发生溢出时一定有 a + b < a 且 a + b < b
+
+    在 c 中 a + b = (a + b) MOD $2^w$，所以 a < $2^w$ 且 b < $2^w$
+
+    发生溢出时一定有 s = a + b - $2^w$ < a (或 b)
+
+*   有符号数：分为加法正溢出和负溢出：
+
+    *   正溢出：a > 0 且 b > 0，但 a + b < 0
+    *   负溢出：a < 0 且 b < 0，但 a + b >= 0;
+
+## data lib
+
+官网下载 xxxhandout.tar 文件，解包，然后根据 README 修改文件
+
+这次仅需要修改 bits.c 文件，他默认给了一个 dlc 用来判断程序是否合法(主要是他要求仅能使用位运算，还限制位运算符的个数)
+
+测试程序是 btest，不过需要使用 makefile 自已编译出来
+
+### bitXor
+
+简单来说就是使用 & 和 ~ 实现异或
+
+这个其实在数电中学过：
+$$
+\begin{equation}
+	\begin{aligned}
+		A\bigoplus B = &A\overline{B} + \overline{A}B \\
+					 = &\overline{\overline{A\overline{B} + \overline{A}B}}\\
+					 = &\overline{\overline{A\overline{B}}\cdot\overline{\overline{A}B}}
+	\end{aligned}
+\end{equation}
+$$
+
+
+```c
+/*
+ * bitXor - x^y using only ~ and &
+ *   Example: bitXor(4, 5) = 1
+ *   Legal ops: ~ &
+ *   Max ops: 14
+ *   Rating: 1
+ */
+int bitXor(int x, int y) {
+  return ~(~(x & ~y) & ~(~x & y));
+}
+```
+
+### tmin
+
+就是返回 32 位符号数的最小值，这个移位就行了
+
+```c
+/*
+ * tmin - return minimum two's complement integer
+ *   Legal ops: ! ~ & ^ | + << >>
+ *   Max ops: 4
+ *   Rating: 1
+ */
+int tmin(void) {
+  return 1 << 31;
+}
+```
+
+### isTmax
+
+判断输入的数是不是 32 位符号数的最大值，如果是就返回 1，否则返回 0
+
+这里先不考虑 32 位的情况，仅考虑 8 位，有 Tmax = 0111,1111，显然 Tmax + 1 = Tmin，而 Tmax + Tmin = 1111,1111(这个数就是 -1)
+
+所以如果输入的 x 位 Tman，那么 x + 1 + x 将得到全 1，此时按位取反将得到 0，而其他情况下按位取反后将为一个大于 0 的数
+
+但是存在一个例外，就是 -1，即 1111,1111(这里按照 8 位进行举例)，所以需要将其排除
+
+如果不考虑 -1 时 我们写成：
+
+```c
+/*
+ * isTmax - returns 1 if x is the maximum, two's complement number,
+ *     and 0 otherwise
+ *   Legal ops: ! ~ & ^ | +
+ *   Max ops: 10
+ *   Rating: 1
+ */
+int isTmax(int x) {
+	int y = x + 1;
+    return !~(x + y); // this is a buggy program
+}
+```
+
+现在进行修成，因为对于 -1 的情况 y 为 0，为了排除 y，可以令结果加上 !y
+
+```c
+/*
+ * isTmax - returns 1 if x is the maximum, two's complement number,
+ *     and 0 otherwise
+ *   Legal ops: ! ~ & ^ | +
+ *   Max ops: 10
+ *   Rating: 1
+ */
+int isTmax(int x) {
+    int y = x + 1;
+    return !(~(x + y) + !y);
+}
+```
+
+### allOddBits
+
+判断一个 32 位符号数的奇数位上是不是全都为 1
+
+做法是将输入的 x 的奇数位提取出来 -> 使用与运算提取出二进制的某一位
+
+然后如果奇数位均为1，那么右移后"相加"后可以得到全 1
+
+```c
+/*
+ * allOddBits - return 1 if all odd-numbered bits in word set to 1
+ *   where bits are numbered from 0 (least significant) to 31 (most significant)
+ *   Examples allOddBits(0xFFFFFFFD) = 0, allOddBits(0xAAAAAAAA) = 1
+ *   Legal ops: ! ~ & ^ | + << >>
+ *   Max ops: 12
+ *   Rating: 2
+ */
+int allOddBits(int x) {
+    // 构建掩码 mask 提取出所有的奇数位
+    int mask = 0xAA;
+    mask = (mask << 8) | mask;
+    mask = (mask << 16) | mask;
+    mask = mask & x;
+    // 左移并通过异或进行加法，理想的话会得到 Tmax
+    mask = (mask >> 1) ^ mask;
+    // Tmax + 1 后得到 Tmin，二者再相加将得到 -1，按位取反后得到 0
+    return !~((mask + 1) ^ mask);
+}
+```
+
+### negate
+
+送分题，返回相反数，这个就记住就行了，按位取反后加一，得到的就是相反数
+
+```c
+/*
+ * negate - return -x
+ *   Example: negate(1) = -1.
+ *   Legal ops: ! ~ & ^ | + << >>
+ *   Max ops: 5
+ *   Rating: 2
+ */
+int negate(int x) {
+  return ~x + 1;
+}
+```
+
+### isAsciiDigit
+
+判断输入的数据输入范围是不是从 0x30 到 0x39
+
+这个最开始的想法是进行 9 次异或，如果有一个结果为 0 那么就证明在这个范围内
+
+```c
+/*
+ * isAsciiDigit - return 1 if 0x30 <= x <= 0x39 (ASCII codes for characters '0' to '9')
+ *   Example: isAsciiDigit(0x35) = 1.
+ *            isAsciiDigit(0x3a) = 0.
+ *            isAsciiDigit(0x05) = 0.
+ *   Legal ops: ! ~ & ^ | + << >>
+ *   Max ops: 15
+ *   Rating: 3
+ */
+int isAsciiDigit(int x) {
+  int var0 = x ^ 0x30;
+  int var1 = x ^ 0x31;
+  int var2 = x ^ 0x32;
+  int var3 = x ^ 0x33;
+  int var4 = x ^ 0x34;
+  int var5 = x ^ 0x35;
+  int var6 = x ^ 0x36;
+  int var7 = x ^ 0x37;
+  int var8 = x ^ 0x38;
+  int var9 = x ^ 0x39;
+  return !var0 | !var1 | !var2 | !var3 | !var4 | !var5 | !var6 | !var7 | !var8 | !var9;
+}
+```
+
+这么做的问题在于操作符的个数超了，显然答案不应该是这样的
+
+现在思考，他给定了上下限，分别为 0x30 和 0x39，是否可以这样做：**假如输入大于 0x39 时和另一个数相加将导致溢出从而边负，而当输入小于 0x30 时和另外一个数相加，由于输入太小导致结果还是负数**，然后利用负数最高位是 1 的性质求解
+
+其实第二条很好满足，求出 0x30 的相反数不就行了吗，如果比 0x30 小，那么加和肯定还是负数
+
+关键在于第一条，下面给出我的思考过程：
+
+考虑 8 位的情况，0x39 = 0011,1001，而 Tmax = 0111,1111，Tmin = 1000,0000
+
+简单来说，我们就是希望求出 Tmax - 0x39，问题在于他不让使用 -
+
+这里最终还是从 Tmin 下手，假如现在只有 7 位数，0x39 和输入 x 导致了溢出，那么显然刚好导致溢出的 x 为 0x39 的相反数，而实际中我们有 8 位数，7 位数溢出的结果，最终体现在第8位变为了 1，即变负
+
+如果可以求出，**0x39 在 31 位情况下的相反数**，那么这个相反数和 0x39 相加时，将正好导致 31 位溢出，而 32 位数符号位被置为1(当输入 x 大于这个相反数时，就更会导致溢出了)
+
+普通的相反数根据[上面](#negate)可知是取反后加一，但是默认 int 类型是 32 位，如果不进行特殊处理的话，我们是无法求出 31 位情况下的相反数的，这里直接给出结论，**如果希望求出数据 31 位情况的相反数，那么我们应该保证最高位在取反后还是 0，然后再进行加一**
+
+>   具体的证明无法给出，但是可以给出启发性的推导，我们可以认为 32 位的 int 类型，本身是 33 位的，在求相反数时，按位取反时，保证了最高位为 0，这样在求出相反数后，将相反数和原数据相加，将导致 32 位溢出，而 33 位进位变成 1
+
+这里保证最高位取反后还是 0 的做法有很多，我这里直接和 Tmin 进行或运算，然后再取反(在取反之前，将最高位置为 1，这样再取反就能保证最高位为 0 了)
+
+到这里其实还没完，在求完了第二个相反数后，我们保证了所有大于等于 0x39 和这个相反数运算将导致最高位被置位，这其实是有问题的，因为我们将 0x39 本身也排除掉了，所以如果是从 Tmin 下手的话，我们需要求出的 0x3a(0x39 + 1) 的相反数，而不是 0x39 的
+
+```c
+/*
+ * isAsciiDigit - return 1 if 0x30 <= x <= 0x39 (ASCII codes for characters '0' to '9')
+ *   Example: isAsciiDigit(0x35) = 1.
+ *            isAsciiDigit(0x3a) = 0.
+ *            isAsciiDigit(0x05) = 0.
+ *   Legal ops: ! ~ & ^ | + << >>
+ *   Max ops: 15
+ *   Rating: 3
+ */
+int isAsciiDigit(int x) {
+    int a = ~((1 << 31) | 0x3a) + 1;
+    int b = ~(0x30) + 1;
+    a = a + x;
+    b = b + x;
+    return !(a >> 31 | b >> 31);
+}
+```
+
+
+
+# 程序的机器级表示
+
+在 x86-64 中使用 64 位表示地址，而在实际中这些地址的高 16 位必须是 0，所以实际可用的地址数量仅为 $2^{48}$，最多表示 256TB 的数据
+
+## 一个简单的例子
+
+一个程序：
+
+```c
+// mstore.c
+long mult(long, long);
+void multstore(long num1, long num2, long *dest) {
+    *dest = mult(num1, num2);
+}
+```
+
+就是把计算两数乘积的c程序，将其编译
+
+```shell
+$ gcc -Og -S mstore.c
+```
+
+得到汇编文件：mstore.s(参数 -S 其实就是进行编译)
+
+```shell
+// mstore.s
+.file   "mstore.c"
+        .text
+        .globl  multstore
+        .type   multstore, @function
+multstore:
+.LFB0:
+        .cfi_startproc
+        pushq   %rbx
+        .cfi_def_cfa_offset 16
+        .cfi_offset 3, -16
+        movq    %rdx, %rbx
+        call    mult@PLT
+        movq    %rax, (%rbx)
+        popq    %rbx
+        .cfi_def_cfa_offset 8
+        ret
+        .cfi_endproc
+.LFE0:
+        .size   multstore, .-multstore
+        .ident  "GCC: (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0"
+        .section        .note.GNU-stack,"",@progbits
+```
+
+这个文件中 . 开头的是伪指令，和程序本身无关，和但和程序的编译有关，是用来知道汇编器和链接器工作的，这里就不考虑了，将其排除后得到：
+
+```shell
+multstore:
+	pushq   %rbx
+	movq    %rdx, %rbx
+    call    mult@PLT
+    movq    %rax, (%rbx)
+    popq    %rbx
+    ret
+```
+
+>   首先将寄存器 rbx 中原来的数据压入栈；然后将 rdx 中的值赋给 rbx；然后调用函数，函数返回后将 rax 的中的值写入 rbx 中对应内存中的空间；最后将弹栈恢复 rbx 的取值
+
+使用汇编器对 .s 文件进行汇编(参数 -c 就是进行汇编)
+
+```shell
+$ gcc -Og -c mstore.s
+```
+
+得到目标文件mstore.o，这个文件是二进制的形式看不懂，但是可以通过反汇编的命令打印反汇编后的汇编代码
+
+```shell
+$ objdump -d mstore.o
+```
+
+>   objdump -d 带有反汇编的意思，不是说 objdump 就是反汇编器
+
+其中有用的信息如下：
+
+```shell
+0000000000000000 <multstore>:
+   0:   53                      push   %rbx
+   1:   48 89 d3                mov    %rdx,%rbx
+   4:   e8 00 00 00 00          callq  9 <multstore+0x9>
+   9:   48 89 03                mov    %rax,(%rbx)
+   c:   5b                      pop    %rbx
+   d:   c3                      retq
+```
+
+>   我私底下看过了，mstore.o 这个文件大概有 1.4KB，反汇编得到的汇编指令有 6 条，一共 14 个字节
+>
+>   也就说 1.4K 个字节的文件中，只有 14 个字节是用来表示指令的
+
+如果对比反汇编得到的汇编指令和原文件的汇编指令的话，其实是可以看到区别的，比如有的指令带 q 有的不带，其实在这些差别都不重要
+
+现在我们补全函数 mult，并写一个 main 函数用来测试
+
+```c
+// test.c
+# include <stdio.h>
+
+void multstore(long, long, long *);
+
+int main(void) {
+        long num1 = 10;
+        long num2 = 20;
+        long d;
+        multstore(num1, num2, &d);
+        printf("%ld\n", d);
+        return 0;
+}
+
+long mult(long num1, long num2) {
+        return num1 * num2;
+}
+```
+
+直接使用 gcc 编译得到可执行目标文件
+
+```shell
+$ gcc -o ms -Og test.c mstore.c
+```
+
+如果使用 objdump 的话也是可以看到 ms 的反编译文件的，这面仅截取函数 multstore 部分
+
+```shell
+00000000000006da <multstore>:
+ 6da:   53                      push   %rbx
+ 6db:   48 89 d3                mov    %rdx,%rbx
+ 6de:   e8 64 00 00 00          callq  747 <mult>
+ 6e3:   48 89 03                mov    %rax,(%rbx)
+ 6e6:   5b                      pop    %rbx
+ 6e7:   c3                      retq
+```
+
+对比一下可以发现，指令没变，但是地址变了，包括实际调用 mult 的地址
+
+可以看到所谓的程序的机器级表示，就是汇编代码，汇编的效率确实高(这个不看语言，应该看程序员:joy:)
+
+gcc 也确实厉害，在汇编、链接的时候甚至可以将保存为 .s 的汇编程序和编译得到的 .s 程序结合
+
+>   当然在 c 中掺杂点汇编还可以使用内联汇编的形式
+
+## 一些基础
+
+### 数据格式
+
+处于一些历史遗留的问题，Intel 的术语 word(字) 的大小是 16 位；所以 32 位被称为双字(double words)，64 位被称为四字(quad words)
+
+下图展示了 c 在 x86_64 中的数据类型，占用的大小，和其在汇编程序中的简写
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/c_data_type_in_x86_64.png)
+
+如果细看的话会发现，其实汇编的简写是有重复的，double 类型和 int 类型都是 l；这个其实不影响，因为整形类型和浮点型使用的不是同一组寄存器
+
+>   这个大小关系和 java 的 8 种基本数据类型的大小是一致的
+>
+>   至少除了指针的剩下 6 种是一致的
+
+### 寄存器
+
+下图给出了在 x86_64 中的 16 个 64 位的通用目的寄存器
+
+>   虽然很多寄存器并不是通用的，有约定俗称的用法，不能随便使用
+>
+>   名字记不住拉倒，反正不关键，用到的时候看图就行了
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/registers.png)
+
+### 操作符
+
+汇编的指令，一般是由操作数和操作符构成的，操作符表示了指令的作用，而操作数一般有三种：
+
+*   立即数，就是常数，写法为 \$ 后跟着一个整数，比如 \$10，$0x10
+
+*   寄存器，写法上面已经给出了，同一个寄存器，使用不同的名称时表示了不同大小的操作数，比如使用 %rax 表示了操作 64 位数据
+
+    >   在 CSAPP 中使用 $r_a$ 表示寄存器 a，而使用 R[$r_a$] 表示寄存器 a 中存储的值
+    >
+    >   这种写法是认为所有的寄存器构成了一个数组 R
+
+*   内存引用：内存对于应用程序来说不过是一个大的字节数组，在 CSAPP 中使用 M[Addr] 表示内存中地址 Addr 处存储数据
+
+    >   值得一提的是，因为数据类型，比如 int 类型占用了 4 个字节，如果一个表示 int 类型的 Addr 为 0x100，那么为了存储这个数据，实际占用的内存空间为 0x100、0x101、0x102、0x103
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/operand_form.png)
+
+值得一提的是最后的内存引用的写法，这是一种通用的写法，如果操作数写成了：Imm($r_b$, $r_i$, s)，那么实际表示的 Addr = $r_b + r_i * s + Imm$；其中 $r_b$ 和 $r_i$ 都是寄存器，而 s 为比例因子，为一个常数，Imm 为立即数，表示基础偏移量
+
+>   看书后的 3.1 练习一下
+
+## mov
+
+数据传送指令，将操作数从 S 复制到 D；一般的写法为 mov S, D
+
+### 简单的 mov
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/simple_data_move.png)
+
+根据操作数的大小，又分为四种，分别对应移动一个字节，一个字（两个字节）、双字（4个字节）、四字（8个字节）
+
+上表中的第五种是移动操作数，将 64 位的立即数移动到寄存器中，一定要注意 movq 操作立即数时，只能操作 32 位的，只不过会通过符号扩展到 64 位，所以如果操作的立即数过大(或者过小)，就会使用 movqabs
+
+要注意的是，不能出现源操作数为内存且目的操作数也是内存的情况(Intel 觉得不行)
+
+>   如果要将内存中一个地址的数复制到另一个地址，需要先将内存中的数放入寄存器，再让寄存器写入内存（分成两步）
+
+此外 mov 指令需要和之前说的寄存器的名称对应上，不能 movl 一个 64 位的寄存器，举几个合法 mov 的例子：
+
+```shell
+movl $0x4050, %eax # movl 操作数是 32 位的，而 eax 本身也是 32 位的；这个指令的意思是将 0x4050 赋值给 eax
+movw %bp, %sp # 寄存器到寄存器
+movb (%rdi, %rcx), %al # 内存到寄存器，从内存中地址为 R[rdi] + R[rcx] 的地方复制 1 Byte 到 al 中
+movb $-17, (%rsp) # 立即数到内存，将 -17 复制到 rsp 指向的位置，注意复制的是 1 Byte
+movq %rax, -12(%rbp) # 寄存器到内存
+```
+
+### 符号扩展
+
+mov 指令支持从较小的源复制到较大的源，这个过程需要补全高位，根据补全高位的方式不同，分为零扩展的 mov(movz) 和符号扩展的 mov(movs)
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/zero_extend_mov.png)
+
+所谓零扩展，就是不管什么情况，高位补零就行了(有点类似逻辑右移)
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/sign_extend_mov.png)
+
+而符号扩展的 mov 高位补位需要根据符号位而定(算数右移)
+
+要注意的是，这里面一定有目的操作数大小大于源操作数
+
+通过对比上下两张图，可以看到，对于零扩展的 mov，好像少了 movzlq，即从 32 位零扩展到 64 位；在 x86_64 下 movl 本身就带有零扩展的意思了，使用 movl 的时候会将目的操作数的高 32 位置为 0(Intel 你怎么总搞这些例外)
+
+在 3.6 中的 ctlq 其实就是 movslq %eax, %rax，相当于特殊编码了
+
+## 入栈和弹栈
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/push_and_pop.png)
+
+push 和 pop 都只有一个操作数
+
+**在 x86_64 中栈向下增长**，即栈底为高地址，栈顶为小地址，寄存器 %rsp 指向栈顶元素的地址
+
+pushq 操作相当于两个操作(这里讨论 pushq %rax)
+
+```shell
+sub $8, %rsp # 将 rsp 保存的地址减八
+movq %rax, (%rsp)
+```
+
+>   不过 push 操作在编码时更加紧凑 
+
+同理 pop 操作也相当于两个操作：先 mov 后 add
+
+栈空间在内存中是共享的，所以其实是可以通过其他手段获取到非栈顶的元素的，这里假设栈中保存的元素都是 4 字(8 Bytes) 类型的：
+
+```shell
+# 通过 mov 很容易获取到非栈顶元素
+$ movq $8(%rsp), %rax # 将栈顶下的元素放到寄存器 %rax 中
+```
+
+## 算数和逻辑操作
+
+<img id="operation" src="https://cdn.jsdelivr.net/gh/SunYuanI/img/img/Integer_arithmetic_operations.png"></img>
+
+先给一个整体图，后面围绕上图展开
+
+### lea
+
+load effective address，一个用来加载地址的指令，但可以进行算数运算
+
+从指令的操作数格式上看，和普通的 mov 命令很像，但一定要区分 lea 和 mov 的区别
+
+之前在 mov 操作中如果操作数为 Imm($r_b$, $r_i$, s) 的格式，那么其实相当于针对内存中的一个地址存取值，而这个地址大小为 $r_b + r_i * s + Imm$
+
+但在 lea 中，同样的操作数，解释就不一样了，如果 %rdx = x，那么:
+
+*   leaq 7(%rdx, %rdx, 4), %rax; 此后 %rax = 5x + 7
+
+*   movq 7(%rdx, %rdx, 4), %rax; 此后 %rax = M[5x + 7]
+
+    >   M[]，表示把内存当成了数组，取出数组下标对应的值
+
+因为 lea 的这种特殊的性质，使得我们可以利用 lea 和 Imm($r_b$, $r_i$, s) 的格式完成一些算数操作
+
+```c
+long scale(long x, long y, long z) {
+        return x + 4 * y + 12 * z;
+}
+```
+
+编译得到汇编文件
+
+```shell
+$ gcc -S -Og scale.c
+$ cat scale.s # 这里仅截取了有用的部分
+scale:
+    leaq    (%rdi,%rsi,4), %rax
+    leaq    (%rdx,%rdx,2), %rcx
+    leaq    0(,%rcx,4), %rdx
+    addq    %rdx, %rax
+    ret
+```
+
+这里要说明的是，一般 %rax 保存的是返回值
+
+可以看到他的比例因子特别喜欢使用 2 4 8 这种数，因为此时乘法可以等效为左移，需要的时钟周期更短，更快
+
+### 简单的一元和二元操作
+
+在<a href="#operation">上表</a>中，给出了若干一元和二元操作，从名字上，可以看到一些加减运算和位运算操作
+
+这些操作都比较简单，名字很好的解释了指令的行为，对于一元操作没什么好解释的；对于二元操作，比如：add %rax, %rdx，他相当于计算了 %rax 和 %rdx 的取值，并将最终的结果存储在 %rdx 中，其他的二元操作都是类似的，如果不确定，现查也行
+
+ ### 移位
+
+正常来说，根据左右移位和逻辑算数移位，组合一起一共具有 4 种，然而逻辑左移和算数左移是一样的(左移又不需要补充符号位)；仅右移需要考虑符号的问题
+
+SAL(算数左移)和 SHL(逻辑左移)二者完全相同，右侧填零
+
+SAR(算数右移)，左侧填符号位
+
+SHR(逻辑右移)，左侧填0
+
+### 乘除
+
+对于 64 位数的乘法，其结果范围最大可以到 128 位，按照正常的思路，如果乘法溢出了，那么就保留低位就行了吧，而在 x86_64 中，保留了对 128 位数的支持，他相当于使用两个 64 位寄存器保存结果
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/multi_and_div.png)
+
+随便举例子来说，imulq 指令仅包含了一个操作数，但如果看上面的解释，它默认将 其中一个操作数和 %rax 进行运算，然后将结果的高 64 位保存在 %rdx 中而低 64 位保存在 %rax 中(这样相当于覆盖掉原来的 %rax)
+
+如果还记得前面的<a href="#operation">表</a>，在这个表中也有一个 imulq 只不过这个指令具有两个操作数，所以这个指令具有一个操作数或两个操作数的两种形式
+
+举例来说：
+
+```c
+# include<inttypes.h>
+
+typedef unsigned __int128 uint128_t;
+
+void mult(uint128_t *dest, uint64_t *x, uint64_t *y) {
+        *dest = (uint128_t)*x * *y;
+}
+```
+
+这里使用了标准 c 中给 uint64_t 表示了无符号的 64 位整数，而因为在标准 c 中没有 128 位的整数，所以这里使用了是 gcc 提供的 __int128 类型，而为了类型名称统一，这里使用 typedef 定义类型为 uint128_t
+
+反编译得到：
+
+```shell
+0000000000000000 <mult>:
+   0:   48 8b 02                mov    (%rdx),%rax
+   3:   48 f7 26                mulq   (%rsi)
+   6:   48 89 07                mov    %rax,(%rdi)
+   9:   48 89 57 08             mov    %rdx,0x8(%rdi)
+   d:   c3                      retq
+```
+
+可以看到计算的结果分别存放在 %rdx(高 64 位) 和 %rax(低 64 位) 中，而在内存中，高 64 位保存在了 M[%rdx + 8]，低 64 位保存在 M[%rdx] 中
+
+指令 cqto 是一个符号扩展指令，一个将 64 位整数，扩展为 128 位的指令，注意它没有操作数，默认将 %rax 符号扩展到 %rdx 中
+
+在我思考除法运算可能除不尽的问题的时候，我看到指令 idivq，同时保存了商和余数；这个指令同时使用 %rdx 和 %rax 表示被除数，最高支持 128 位的除法，如果是普通的 64 位除法，那么在将变量保存在 %rax 后，会使用 cqto 进行符号扩展
+
+## 条件码
+
+### 简单的条件码
+
+![](../img/condition_codes.png)
+
+根据指令的结果设置
+
+CF 进位标志：最近的操作使得最高位产生了进位时置位(无符号数运算溢出的时候置位)
+
+ZF 零标志：最近的操作运算结果为 0 时置位
+
+SF 符号标志：最近计算的结果为负数时置位
+
+OF 溢出标志：最近的操作导致补码溢出时置位(有符号数的运算溢出的时候置位，正溢出或负溢出)
+
+<a href="#operation">上图</a>中的所有指令都会导致条件码置位，**除了 lea**(尽管 lea 可以用来运算，但其主要作用是计算内存地址的)
+
+此外还存在两个指令可以使得条件码置位：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/cmp_and_test.png)
+
+要注意的是，这两个操作都是根据计算结果将条件码寄存器置位，但不会将计算结果保存
+
+>   test一般用来看看当前这个值自己的大小；而cmp一般用来看看两个值之间的大小
+
+### 访问条件码
+
+条件码寄存器是不能直接访问的，但可以通过下面几种方式间接访问：
+
+*   根据条件码寄存器的某种组合关系，将一个字节置为 0 或 1([set](#set))
+*   根据条件码寄存器的某种组合关系，使得程序跳转(if 判断的基础，[jmp](#jmp))
+*   根据条件码寄存器的某种组合关系，传递数据([conditional moves](#conditional moves))
+
+### set
+
+set 指令仅包含一个操作数，且这个操作数一定是一个寄存器，且为寄存器的最低为的字节
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/set_instructions.png)
+
+举例来说：
+
+```c
+int cmp(int a, int b) {
+    return a > b ? 1 : 0;
+}
+```
+
+反编译得到：
+
+```shell
+000000000000005f <cmp>:
+  5f:   39 f7                   cmp    %esi,%edi
+  61:   0f 9f c0                setg   %al
+  64:   0f b6 c0                movzbl %al,%eax
+  67:   c3                      retq
+```
+
+首先比较 %esi 和 %edi(一般的话第一个参数保存在 %rdi，第二个参数在 %si，第三个参数在 %rdx，后面就记不住了)，如果大于 0，那么给 %al 置位，然后将其复制给 %eax(一般返回值保存在 %rax 中)
+
+>   注意 movzbl 零扩展到 32 位，之前说过在 x86_64 中如果计算的结果为32位的，那么会将其高32位全部设置为0
+
+思考一下 set 指令是如何根据条件码寄存器置位的
+
+先考虑一下符号数中的 setl 是如何置位的，假如 a，b 均为符号数，那么在 a < b 时 setl 会将寄存器置位
+
+首先考虑 cmp 指令，cmp b, a 会根据 a - b 进行置位
+
+>   为什么不是 cmp a, b 这个主要和 cmp 指令本身有关；当 set 和 cmp 同时使用时 setl 指代的就是 cmp 的后一个操作数小于前一个操作数的情况
+
+如果 a < b，那么显然 a - b < 0，此时 SF 会置位，当然这是理想的情况，如果出现了负溢出，那么 OF 会置位，此时 SF 不置位(因为负溢出后变正数)
+
+**综上 a < b，a - b < 0，所以 SF 会置位(OF 不置位)，而出现负溢出时 OF 会置位(SF 不置位)**，综上 setl 本质上就是 SF ^ OF
+
+对于其他符号数的比较，其实都是基于 setl 的基础上添添减减得到的，比如 setle 就是添加了等于 ZF 的条件
+
+而对于无符号数，本身是不具有负数的，但是如果 a - b < 0 时，此时 CF 会被置位，因此对于无符号数，setl 判断就比较简单了(只要和 CF 一致就行了)
+
+### jmp
+
+存在直接跳转和间接跳转两种情况：
+
+*   直接跳转，跳转目标为指令编码的一部分
+
+    那种带标签的就是直接跳转：
+
+    ```shell
+    main:
+    	jmp .L1
+    .L1:
+    	popq %rdx
+    ```
+
+*   间接跳转，跳转目标保存在寄存器或内存中，这种跳转需要在寄存器或内存前加上 *
+
+    一般的写法为 jmp *%rax(从寄存器中取出跳转目标) 或 jmp *(%rax)(从内存中取出跳转目标)
+
+不同的 jmp 是无条件跳转，运行到了，就会直接跳转，更多的是条件跳转，他的写法和 set 基本一样 
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/jump_instructions.png)
+
+#### 编码
+
+也许会好奇，jmp 指令的跳转是如何实现的，即 jmp 是如何被汇编器和链接器处理的；
+
+一般而言 jmp 指令的编码为 PC-relative 的，即当前 jmp 指令的偏移量为当前指令和目标指令的差值，这里使用 CSAPP 中使用的例子作为说明
+
+>   当然也有绝对地址的编码，不过这种用的少
+
+现在有一个 .s 汇编文件
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/branch.s_file.png)
+
+可以看到当前文件中具有两个跳转指令，在汇编代码期间，使用标签指明跳转的位置，将他汇编得到可重定位目标文件后( .o 格式)，并进行反编译得到
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/branch.o_dump_file.png)
+
+这里不考虑程序执行的逻辑，仅关注两条 jmp 指令
+
+首先是第一个 jmp 指令，我们假设第二行的后面的 0x03 就是 jmp 的偏移量，我们发现 0x03 和**下一个指令的地址** 5 相加正好得到 8(反编译得到的跳转位置)
+
+然后看第二个 jmp 指令，还是一样的，假设第 5 行的 0xf8 就是偏移量，更具补码的特点 0xf8 其实就是 -8，将 -8 和下一个指令的地址 d(就是 13) 相加正好得到 5(反编译得到的跳转位置)
+
+根据上面两个的规则，我们猜测 jmp 指令的**偏移量加上下一个指令编码的地址就是最终 jmp 跳转到的地址**
+
+将 .o 文件经过链接器链接，得到可执行目标文件，并将其反编译得到
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/branch_dump_file.png)
+
+对比链接后的文件和之前的 .o 文件，可以看到指令被定位到了不同的地址，但是注意指令的编码并未发生改变，这意味着相对偏移的规律依旧存在，这就是使用 PC-relative 编码的好处
+
+##### rep ret
+
+在上面的例子中，我们看到了 rep 和 ret 连用的情况；都知道 ret 是用来表示方法返回的，那么这个 rep 是干什么的
+
+如果正常查阅文档，可以知道 rep 是用来重复字符串的，即 repeating string operation，看起来和方法返回也没什么关系
+
+不过要注意，对于第五行的指令 jg，分支不跳转时，将直接执行第六行 repz retq；AMD 说，通过分支跳转到达 ret 时，会使得处理器无法预测 ret 的目的(their processors cannot properly predict the destination of a ret instruction when it is reached from a jump instruction.)，所以这里的 rep 可以理解为占位符，并没有任何作用，目的是避免通过分支到达 ret
+
+#### 条件判断
+
+根据 jmp 指令的特点，显然可以实现 if 语句
+
+举个例子：
+
+一个用来计算差的绝对值的函数：
+
+```c
+long absdiff(long x, long y) {
+    long rst;
+    if (x < y) {
+		rst = y - x;
+    } else {
+        rst = x - y;
+    }
+    return rst;
+}
+```
+
+编译后得到：
+
+```assembly
+absdiff:
+.LFB7:
+    cmpq    %rsi, %rdi
+    jl      .L8
+    movq    %rdi, %rax
+    subq    %rsi, %rax
+    ret
+.L8:
+    movq    %rsi, %rax
+    subq    %rdi, %rax
+    ret
+```
+
+分支的跳转十分直观，借助 c 中的 goto 可以写成一个通用的形式：
+
+```shell
+fun:
+	t = test-exp;[表达式计算 true 或 false]
+	if (t)
+		goto true;
+	else-exp[else 部分的汇编代码]
+	goto done;
+true:
+	then-exp[if 部分的汇编代码]
+done:
+	[除了 if-else 之外的其他部分]
+```
+
+即根据 if 进行跳转，当然有的时候编译器编译得到 .s 文件中会根据 else 跳转，形式如：
+
+```shell
+fun:
+	t = test-exp;
+	if (!t)
+		goto false;
+	then-exp
+	goto done;
+false:
+	else-exp;
+done:
+```
+
+这两种基本上没什么区别，但如果思考那些只有 if 没有 else 的场景，下面第二种编码更好(编码更加紧凑)
+
+```shell
+# 考虑只有 if 没有 else
+# 第一种编码
+fun:
+	t = test-exp;
+	if (t)
+		goto true;
+	goto done;
+true:
+	then-exp
+done:
+# 第二种编码
+fun:
+	t = test-exp;
+	if (!t)
+		goto done;
+	then-exp;
+done:
+```
+
+### conditional moves
+
+带有条件的move，上面讲了根据比较的结果选择一个分支继续执行，这种做法比较贴合正常的思路，但是在处理器上需要占用的时间更长
+
+一种代替的思路是同时计算两个分支的结果，然后根据条件判断，从两个结果中选择一个
+
+>   这种思路看起来费力不讨好，好像计算量更大，不过因为处理器的[流水线](#流水线)机制，实际中其实表现更好
+
+要明确的是，并不是所有的分支都可以使用 conditional moves 代替
+
+以上面的例子为例：
+
+```c
+long absdiff(long x, long y) {
+    long rst;
+    if (x < y) {
+		rst = y - x;
+    } else {
+        rst = x - y;
+    }
+    return rst;
+}
+```
+
+编译得到：
+
+```assembly
+asbdiff:
+	movq 	%rsi, %rax # 将 y 保存在 %rax 中
+	subq	%rdi, %rax # %rax = y - x
+	movq	%rdi, %rdx # 将 x 保存在 %rdx 中
+	subq 	%rsi, %rdx # %rdx = x - y
+	cmpq 	%rsi, %rdi # 比较 x 和 y
+	cmovge 	%rdx, %rax # x >= y 时, %rax = %rdx
+	ret				   # ret 返回时返回值保存在 %rax 中
+```
+
+更多的 conditional moves 如下
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/cmov_instructions.png)
+
+>   其实和 jmp 差不多，都是根据条件码寄存器的组合进行判断
+
+cmov 的一般形式如下：
+
+```shell
+v = then-exp;
+ve = else-exp;
+t = test-exp;
+if (!t) v = ve;
+```
+
+反正不用 goto 了，且仅当 t 不满足条件时才需要重新赋值
+
+不过正如上面说过的，并不是所有的条件分支都可以使用 cmov 代替，因为有时分支可能和条件判断强相关，如果条件不满足，还是进入了分支，会导致非法访问的情况，一个最简单的例子就是访问数组的例子，传入的下标不满足条件，还是访问了数组，肯定会出错
+
+再举一个简单的例子：
+
+```c
+long cread(long *p) {
+    return p ? *p : 0;
+}
+```
+
+这个程序判断指针是否为空，如果不为空就返回指针指向的地址的值，否则返回 0
+
+看起来这个程序很容易编译为 cmov 的格式：
+
+```assembly
+cread:
+	movq	(%rdi), %rax
+	movl 	$0, %edx
+	test	%rdi, %rdi
+	cmove	%rdx, %rax
+	ret
+```
+
+>   这里在赋零值的时候很细节的使用了 movl，而不是 movq，因为我们都知道 movl 进行 32 位寄存器的赋值时会将高 32 位置为 0
+
+如果实际将两种情况带入，会发现大问题，即当 *p 为空时，显然第二行的 movq 是非法操作，程序访问了零地址，这个一定会报错；所以 gcc 在对上面的程序进行编译时，一定不会编译成 cmov 的格式
+
+conditional move 不一定都会起到优化的作用，在运算足够复杂时(expensive computations)，使得分支的额外计算的开销远远大于了错误预测的开销时，将会导致 conditional move 的效果比分支还差
+
+所以为了程序运行的正确性 gcc 对于 cmov 的使用是很谨慎的，基本上还是使用 jmp 比较多
+
+#### 流水线
+
+指令的执行并不是程序运行的最小单位，执行一个指令包括：从内存中取指、确定指令类型、从内存中获取数据、执行计算、将数据写回内存(高速缓存)、更新 PC 等操作
+
+为了提高效率处理器会通过将指令重叠，比如在当前执行执行到从内存中获取数据阶段时，同时执行前一个指令的计算操作；这样原来单位时间内只能执行指令执行的一个操作，通过流水线技术可以执行多个操作，大大提高了效率
+
+然而使用流水线技术的一个重要前提是指令的确定性，程序需要明确前后执行的指令，才可以同时执行多个指令
+
+当程序遇到条件跳转时(jmp)，需要等待分支条件求值完成后才可以决定分支的走向，比较浪费时间；所以现代的处理器使用分支预测逻辑，预测分支是否执行，这种预测的准确性高达 90% (听上去还挺神的)，即便如此还是会存在预测错误的情况，此时处理器在获取到条件判断的结果后需要抛弃当前已经进行的错误运算，然后重新选择其他分支进行运算，严重浪费了处理器的时钟周期
+
+而如果使用 conditional move 代替 jmp，因为不存在分支的情况，所以也就不存在预测错误导致的浪费，所以肯定运算速度更快
+
+>   算错了比多算更浪费时间
+
+#### 我就要用 cmov
+
+其实上面的 absdiff.c 无论怎么编译，得到的汇编文件都是使用 jmp 指令的，气死我了:imp:
+
+```shell
+$ gcc -S -Og test.c                                                      
+$ cat test.s                                                             
+        .file   "test.c"
+        .text
+        .globl  absdiff
+        .type   absdiff, @function
+absdiff:
+.LFB24:
+        .cfi_startproc
+        cmpq    %rsi, %rdi
+        jl      .L4
+        movq    %rdi, %rax
+        subq    %rsi, %rax
+        ret
+.L4:
+        movq    %rsi, %rax
+        subq    %rdi, %rax
+        ret
+        .cfi_endproc
+.LFE24:
+        .size   absdiff, .-absdiff
+        .section        .rodata.str1.1,"aMS",@progbits,1
+.LC0:
+        .string "%ld\n"
+        .text
+        .globl  main
+        .type   main, @function
+main:
+.LFB23:
+        .cfi_startproc
+        subq    $8, %rsp
+        .cfi_def_cfa_offset 16
+        movl    $20, %esi
+        movl    $10, %edi
+        call    absdiff
+        movq    %rax, %rdx
+        leaq    .LC0(%rip), %rsi
+        movl    $1, %edi
+        movl    $0, %eax
+        call    __printf_chk@PLT
+        movl    $0, %eax
+        addq    $8, %rsp
+        .cfi_def_cfa_offset 8
+        ret
+        .cfi_endproc
+.LFE23:
+        .size   main, .-main
+        .ident  "GCC: (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0"
+        .section        .note.GNU-stack,"",@progbits
+```
+
+我实在受不了了，直接先编译成 .s 文件，不就是汇编吗，那我就写成汇编
+
+```shell
+$ vim test.s
+$ cat test.s
+        .file   "test.c"
+        .text
+        .globl  absdiff
+        .type   absdiff, @function
+absdiff:
+.LFB24:
+        .cfi_startproc
+        movq    %rsi, %rax
+        subq    %rdi, %rax
+        movq    %rdi, %rdx
+        subq    %rsi, %rdx
+        cmpq    %rsi, %rdi
+        cmovge  %rdx, %rax # 我就是要用 cmove
+        ret
+        .cfi_endproc
+.LFE24:
+        .size   absdiff, .-absdiff
+        .section        .rodata.str1.1,"aMS",@progbits,1
+.LC0:
+        .string "%ld\n"
+        .text
+        .globl  main
+        .type   main, @function
+main:
+.LFB23:
+        .cfi_startproc
+        subq    $8, %rsp
+        .cfi_def_cfa_offset 16
+        movl    $20, %esi
+        movl    $10, %edi
+        call    absdiff
+        movq    %rax, %rdx
+        leaq    .LC0(%rip), %rsi
+        movl    $1, %edi
+        movl    $0, %eax
+        call    __printf_chk@PLT
+        movl    $0, %eax
+        addq    $8, %rsp
+        .cfi_def_cfa_offset 8
+        ret
+        .cfi_endproc
+.LFE23:
+        .size   main, .-main
+        .ident  "GCC: (Ubuntu 7.5.0-3ubuntu1~18.04) 7.5.0"
+        .section        .note.GNU-stack,"",@progbits
+```
+
+最后还是运行了:v:
+
+```shell
+$ gcc -o test test.s
+$ ./test
+10
+```
+
+### 循环
+
+在汇编的层面是不存在循环的，不过通过条件判断 cmp 和 jmp 可以实现循环
+
+#### do_while
+
+八百年遇不到一次，其一般的形式如：
+
+```assembly
+loop:
+	body-statement
+	t = test-exp;
+	if (t)
+		goto loop;
+```
+
+举个例子，一个用来求 n 的阶乘的例子
+
+```c
+long fact_do_while(int n) {
+    long rst = 1;
+    do {
+        rst = rst * n;
+        n = n - 1;
+    } while (n > 1);
+    return rst;
+}
+```
+
+编译得到：
+
+```assembly
+fact_do_while:
+.LFB0:
+    movl    $1, %eax
+.L2:
+    movslq  %edi, %rdx
+    imulq   %rdx, %rax
+    subl    $1, %edi
+    cmpl    $1, %edi
+    jg      .L2
+    rep ret
+```
+
+呃呃，没什么好解释的，很清晰了
+
+##### gcc 的小动作
+
+gcc 进行编译时通常会进行指令重排，在 c 中定义的变量不一定和寄存器一一对应，比如：
+
+```c
+long loop(long x) {
+        long y = x * x;
+        long *p = &x;
+        long n = 2 * x;
+        do {
+            x += y;
+            (*p)++;
+            n--;
+        } while (n > 0);
+        return x;
+}
+```
+
+这是一个没什么意义的函数，这里仅仅是说明的作用，将其编译得到：
+
+```assembly
+loop:
+.LFB1:
+        movq    %rdi, %rax # %rax = x
+        movq    %rdi, %rcx # %rcx = x
+        imulq   %rdi, %rcx # %rcx = x * x
+        leaq    (%rdi,%rdi), %rdx # %rdx = 2 * x
+.L4:
+        leaq    1(%rcx,%rax), %rax # %rax += %rcx + 1
+        subq    $1, %rdx
+        testq   %rdx, %rdx
+        jg      .L4
+        rep ret
+```
+
+我们很容易将 x 和 %rax 对应，类似的 y 和 %rcx、n 和 %rdx；但是找不到 p 对应的寄存器
+
+实际对比代码发现，gcc 已经将 p 优化掉了，循环中的 (*p)++，其实就是 x++，反映在汇编中 lea 指令同时包括了 x += y 和 x++ 两个操作
+
+综上在经过 gcc 编译后，变量和寄存器不能保证一一对应的关系，此外在汇编代码中会引入源代码中不存在的字面量(可能是立即数)，gcc 也会尝试使用一个寄存器保存多个变量
+
+#### while
+
+这个就很常见了，针对 while 循环，gcc 具有的两种编码方式：
+
+* jump to middle
+
+  ```assembly
+  	goto test;
+  loop:
+  	body-statement;
+  test:
+  	t = test-exp;
+  	if (t)
+  		goto loop;
+  ```
+
+  首先无条件的跳转到结尾进行测试，满足条件后再进入循环
+
+* guarded-do
+
+  ```assembly
+  test:
+  	t = test-exp;
+  	if (!t)
+  		goto done;
+  loop:
+  	body-statement;
+  	goto test;
+  done:
+  ```
+  
+  从名字上可以看出来，和 do-while 有点关系，其实就是在 do-while 前加了一次判断
+  
+  首先使用条件分支，如果不满足条件直接跳过循环，如果满足条件就把这个循环变为 do_while 循环
+
+一般而言 gcc -Og 参数会将其编码为 jump to middle，而参数 -O1 会编码为 guarded-do
+
+#### for
+
+本质上 for 可以转化为带有更新操作的 while
+
+```assembly
+ini-exp;
+while (test-exp) {
+	body-statement;
+	update-exp;
+}
+```
+
+根据上面 [while 循环](#while) 存在两种编码，自然 for 循环也存在两种编码
+
+*   jump to middle
+
+    ```assembly
+    ini-exp;
+    goto test;
+    loop:
+    	body-statement;
+    	update-statement;
+    test:
+    	t = test-exp;
+    	if (t)
+    		goto loop;
+    ```
+
+*   guarded-do
+
+    ```assembly
+    ini-exp;
+    test:
+    	t = test-exp;
+    	if (!t) 
+    		goto done;
+    loop:
+    	body-statement;
+    	update-statement;
+    	goto test;
+    done;
+    ```
+
+### switch
+
+使用整数索引进行多重分支
+
+跳转表：本身就是一个数组，数组中存储的元素为内存地址，准确说时代码段的开始地址；
+
+switch 借助跳转表，当 test-exp 等于对应的跳转表的对应下标索引时，跳转到对应代码段执行
+
+使用 switch 相当于借助跳转表实现分支，和大量的 if-else 相比，switch 的执行实现和分支的数量无关
+
+>   使用 if-else 的执行时间是不确定的，毕竟输入不同，进入的 if 的个数也是不一样的
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/switch_statement.png)
+
+上图中包含情况：
+
+* 写了case没写break：102(因为没有 break，所以运行完当前分支后会继续运行后面的分支)
+* 空case：104
+* 缺少的case：101，105
+
+编译得到得到：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/switch_statement_assembly.png)
+
+首先将 n 减去 100，这是因为 case 语句的有效下标从 100 开始，这样可以将 100 - 106 映射为 0 - 6
+
+然后比较和 6 的大小，注意跳转的地方是 ja，即无符号数的比较，同时包含了 n 大于6和 n 为负数的情况
+
+>   因为编码格式是一样的，负数会被映射为一个很大的正数，然后使用无符号数的比较，正好将负数的情况一同排除掉
+
+随后根据跳转表进行跳转，注意这里的写法
+
+```assembly
+jmp	*.L4(,%rsi,8)
+```
+
+这是间接跳转的写法，实际跳转的地址为 .L4 + 8 * %rsi，这里存储了跳转表，即一个数组，这部分编译后存储在可执行文件的 .rodata 部分
+
+因为跳转表中存储的元素为地址(8 Bytes)，故使用地址的形式访问时比例因子为 8
+
+<img id="jump_table_in_assembly" src="https://cdn.jsdelivr.net/gh/SunYuanI/img/img/jump_table.png"/>
+
+从上到下分别对应 case 为 0,1,....6 的情况
+
+注意到对于那些没有在 c 中出现的 case，比如 101 和 105 他默认会跳转到默认的 default 代码段
+
+而对于重复的 case 比如 104 和 106 也仅仅需要在在跳转表中对应下标处存储相同的地址即可
+
+而至于缺少 break 的情况，就更好说了，体现在代码段中就是在代码段结束后缺少了 jmp 语句，使其不能跳转到结束位置而进入了下一个代码段
+
+#### 稀疏的 case
+
+其实根据上面的跳转表连续的特征，此时可以考虑一个有趣的问题，如果 case 语句十分分散，比如只有两个 case 其中一个为 0 而另外一个为 1000000，那么 gcc 会如何优化呢
+
+```c
+int switch_case(long n) {
+    int rst = 1;
+    switch (n) {
+        case 1:
+            rst *= 11;
+            break;
+        case 1000:
+            rst += 12;
+            /* fall through(没有使用 break 终止 case) */
+        case 1000000:
+            rst -= 13;
+            break;
+        case 1000000000:
+        case 10000000000000:
+            rst <<= 6;
+            break;
+        default:
+            rst = 0;
+    }
+    return rst;
+}
+```
+
+ 编译后得到：
+
+```assembly
+switch_case:
+        cmpq    $1000000, %rdi
+        je      .L3
+        cmpq    $1000000, %rdi
+        jg      .L4
+        cmpq    $1, %rdi
+        je      .L5
+        cmpq    $1000, %rdi
+        jne     .L2
+        movl    $13, %eax
+        jmp     .L6
+.L4:
+        cmpq    $1000000000, %rdi
+        je      .L9
+        movabsq $10000000000000, %rax
+        cmpq    %rax, %rdi
+        je      .L9
+.L2:
+        movl    $0, %eax
+        ret
+.L3:
+        movl    $1, %eax
+.L6:
+        subl    $13, %eax
+        ret
+.L5:
+        movl    $11, %eax
+        ret
+.L9:
+        movl    $64, %eax
+        ret
+```
+
+可以看到此时 gcc 会将 case 语句优化为 if 分支
+
+## 过程
+
+我其实感觉"过程"这个翻译不是很好，所谓的过程，其实说的是 c 中的函数，java 中的方法，在不依赖任何编程语言的时候，使用 "过程" 作为抽象名词
+
+过程 P 调用过程 Q，过程 Q 结束运行后返回过程 P，需要依赖几个核心机制：
+
+*   控制传递(passing control)：调用过程 Q 时，需要让 PC 指向 Q 代码段开始的地址，而当结束调用后需要将 PC 指向 P 中调用 Q 后面那条指令的地址
+*   数据传递(passing data)：P 调用 Q 可以向 Q 传递参数(若干)，Q 过程结束后可以向 P 提供返回值(像 python 这种甚至可以有多个返回值)
+*   内存的分配和释放(allocating and deallocating memory)：过程 Q 在运行时可能需要额外的内存空间，需要在运行前就申请分配到，而在运行结束后需要释放已经占用的内存空间
+
+后面的介绍主要就是围绕上面这三个机制展开
+
+### 栈结构
+
+反正目前稍微学过一点点的 c，java 在运行时都具有栈结构
+
+>   java 的内存模型可复杂多了，虚拟机栈仅仅是一部分，此外 java 的栈帧也更加复杂
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/general_stack_structure.png)
+
+显然在运行的 c 程序中也具有栈的结构，其中也具有栈帧，且也可以认为一个栈帧就是一个方法(c 里面叫函数)，此外这里也称呼位于栈顶的栈帧为当前栈帧
+
+要注意栈自顶向下生长，栈顶为小地址，为了表示栈顶 x86_64 专门使用了 %rsp 保存栈顶地址
+
+一个栈帧中包括了(可能包括了，这里的顺序为自顶向下)：被保存的寄存器的值、局部变量、参数构造区、方法返回地址
+
+>   这四个区域随着后面的介绍也会不断说明
+
+对栈的基本操作[前面](#入栈和弹栈)已经说过了
+
+### 控制转移
+
+之前应该也看到过了汇编中使用 call 进行函数调用，使用 ret 表示函数结束返回
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/call_and_ret.png)
+
+方法的调用其实就是跑到别的地方执行一段代码，执行结束了再回到当前位置；因为 PC 寄存器(其实就是 %rip) 指向了下一条需要执行的指令的地址，那么方法调用和返回其实就是修改 %rip 的过程
+
+注意到上面的 call 是具有操作数的，它表明了到执行位置获取调用函数的地址，但 ret 是没有操作数的，所以方法的返回地址需要在调用时就保存(不然不会回不来了吗)
+
+举一个简单的例子：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/illustration_of_call_and_ret.png)
+
+在 main 中调用方法 multstore，我们关注的细节是调用前后和返回前后栈的变化
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/illustration_of_call_and_ret_stack.png)
+
+其实还是挺清晰的，下面给一个稍微复杂的调用例子
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/detail_msg_of_call_and_ret.png)
+
+>   简而言之，在调用 call 后在当前栈帧中保存下一条指令的地址，为方法返回地址，而调用 ret 后会从栈中取出这个地址
+
+### 数据传送
+
+调用函数，需要传递参数，事实上只有 6 个寄存器可以用来保存方法调用参数，如果参数数量太多，就需要在参数放在当前栈帧中(比如 P 调用 Q，参数数量太多，就把多的参数放在 P 的栈帧中)
+
+传递参数的寄存器的使用不是随意的，而是特定名称的寄存器，且必须按照特定顺序保存参数
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/registers_to_pass_params.png)
+
+需要借助栈空间保存方法调用参数，那么参数在栈中一定是 8 的倍数对其格式的；比如，参数是 int 类型的，那么在栈中传递时，也将占用 8 Bytes 的大小
+
+举个例子吧：
+
+```c
+void proc(long a1, long *a1ptr, 
+         int a2, int *a2ptr, 
+         short a3, short *a3ptr, 
+         char a4, char *a4ptr) {
+        *a1ptr += a1;
+        *a2ptr += a2;
+        *a3ptr += a3;
+        *a4ptr += a4;
+}
+```
+
+这个函数具有 8 个参数，在当前函数中访问参数，需要访问调用当前函数的栈帧中的一些区域
+
+```assembly
+proc:
+    movq    16(%rsp), %rax # 将 %rsp + 16 处的元素放在 %rax 中，这是第八个参数 a4ptr
+    addq    %rdi, (%rsi) # *a1ptr += a1
+    addl    %edx, (%rcx) # *a2ptr += a2
+    addw    %r8w, (%r9) # *a3ptr += a3
+    movl    8(%rsp), %edx # 将 %rsp + 8 处的元素放在 %edx 中，这是第七个参数 a4(尽管这里读取了 32 位，下面 addb 实际上仅用了最低的 8 位)
+    addb    %dl, (%rax) # *a4ptr += a4
+    ret
+```
+
+注意**调用 proc 方法的栈帧**的结构如下，其中 %rsp 处存储的是方法返回地址
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/illustration_of_stack_frame_in_fun.png)
+
+### 栈中的局部变量
+
+栈帧中保存的不仅仅有方法返回地址和调用其他方法的参数，还可能具有一些当前方法运行时需要保存的局部变量
+
+理论上，16 个通用寄存器，怎么都够用了，但显然还是有些场景下需要在栈中保存局部变量
+
+举例来说：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/illustration_of_call_proc.png)
+
+函数 call_proc 调用了之前的函数 proc，其汇编代码 16 行之前都是在为调用方法 proc 进行准备，分配了大量的栈空间用于保存局部变量
+
+在函数调用之前，栈的结构如下：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/stack_frame_of_call_proc.png)
+
+注意函数的调用参数在栈中是以 8 Bytes 对齐的格式存储的，而局部变量占据的内存空间是根据变量类型决定的
+
+### 保存寄存器中的值
+
+寄存器是所有过程共享的，不同的方法(函数)使用的是同一组寄存器，在函数的调用过程中，比如 P 调用了 Q，需要保证 Q 的调用不会影响 P 使用的寄存器中数据的正确性，所以进行方法调用时，需要保存寄存器中的值
+
+寄存器可以被分类为：被调用者保存寄存器和调用者保存寄存器
+
+虽然名字上看起来不是那么直观，但举个例子还是很好理解的，现在考虑函数 P 调用了函数 Q；
+
+所谓被调用者保存寄存器，就是说在 P 调用 Q 的时候，由 Q 负责保存寄存器的值，在 Q 运行自己的代码之前，需要想办法把寄存器的值保存下来，在运行结束后恢复这些寄存器的值
+
+而与之相对的调用者保存寄存器，就是 P 调用 Q 之前，P 负责保存寄存器的值，在调用 Q 之前，需要想办法把寄存器的值保存下来，在调用 Q 结束运行后恢复这些寄存器的值
+
+在 x86_64 中 %rbx、%rbp、%r12~%r15 属于被调用者保存寄存器；而剩下的所有(其实还要除了 %rsp)都是调用者保存寄存器
+
+>   为什么不包括 %rsp，我猜测是因为 %rsp 的使用方式是约定好的，就是栈指针，它的使用方式是固定的，不需要额外保存
+
+保存并不一定意味着把寄存器的取值放在某个地方存起来，然后结束调用后再恢复，因为完全有可能当前程序根本就没用到那些寄存器，此时就不保存了，随便调用程序如何修改寄存器的取值都不会影响当前程序的正确性，这一点一定要注意
+
+当涉及到变量的保存时，就需要用到栈空间，一般而言函数倾向于让别的函数替自己保存取值；还是假如 P 调用 Q 的例子，如果 P 中局部变量保存在调用者保存寄存器中，那么在 P 调用 Q 的时候，P 会尽可能将这些调用者保存寄存器中的变量复制到被调用者保存寄存器中，让 Q 替代自己保存
+
+不过毕竟从数量上来看，还是调用者保存寄存器多，所以如果实在放不下就按照[上面](#栈中的局部变量)的方式将局部变量保存在自己的栈帧中
+
+考虑这样一个程序
+
+```c
+long Q(long);
+long P(long x, long y) {
+        long u = Q(x);
+        long v = Q(y);
+        return u + v;
+}
+```
+
+在 P 中调用了 Q，我们在第一次调用 Q 的时候需要保证保存 y 的寄存器在调用结束后可以正常恢复，只有这样才可以保证后面第二次调用的正确性；在第二次调用 Q 的时候需要保证保存 u 的寄存器可以正常恢复，只有这样才可以保证后面返回的正确性
+
+将其编译得到：
+
+```assembly
+P:
+    pushq   %rbp	# 在 P 的逻辑代码运行之前保存了被调用者保存寄存器 %rbp 和 %rbx
+    pushq   %rbx
+    subq    $8, %rsp	
+    movq    %rsi, %rbp # 将 y 保存在 %rbp 中，保证在调用 Q 后，可以正常恢复
+    call    Q@PLT
+    movq    %rax, %rbx # 将 u 保存在 %rbx 中，保证第二次调用 Q 后，可以正常恢复
+    movq    %rbp, %rdi # 将 y 转移到 %rdi 中，其实就是把参数放过去
+    call    Q@PLT
+    addq    %rbx, %rax # 执行加法操作
+    addq    $8, %rsp
+    popq    %rbx	# 在 P 的逻辑代码结束后从栈中恢复原来保存的取值
+    popq    %rbp
+    ret
+```
+
+## 数组
+
+之前就知道数组在 c 中占据连续的内存空间，一个数组占据的空间和数组的长度和变量的类型相关
+
+数组本身就是一个地址(指针)，所以其实通过 *arr 访问数组和通过 arr[i] 访问是一样的
+
+假如定义 E 为数组，数组的起始地址保存在 %rdx 中访问数组的下标索引保存在 %rcx 中，现在需要把访问的值放到 %rax 中
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/ptr_arr_operations.png)
+
+注意上表中最后一项返回的是两个地址的差
+
+>   这个表其实存疑，随便看看得了
+
+对于多维数组，这里简单讨论二维数组，底层占用的还是连续的内存空间，且按照先排满一行，再排第二行的规律排列
+
+类型 T 的数组，有 R 行 C 列，如果数组的地址为 $x_d$ 访问 i 行 j 列元素地址为 $x_d + (i * C + j) * L$，其中 L 为类型 T 的大小
+
+特别的 gcc 会对数组的操作进行优化，具体的分为针对定长数组和变长数组两种
+
+要说明的是，**这里的变长和定长并不是类似 List 和 普通数组的关系**，实际上针对的都是 c 实现的普通的数组(这里 CSAPP 的说法严重背锅)
+
+在原书中针对的应该是，根据在调用方法前，是否可以确定数组的大小分为定长数组和变长数组两类
+
+### 定长数组
+
+针对定长数组，一般而言可以通过如下方式定义：
+
+```c
+#define N 16
+typedef int fix_matrix[N][N];
+```
+
+这样，我们在声明数组时只需要：
+
+```c
+fix_matrix a;
+```
+
+此时 a 就是一个 16x16 的矩阵
+
+现在有一个程序计算两个矩阵的第 i 行和第 j 列的乘积
+
+```c
+# include <stdio.h>
+# define N 16
+
+typedef int fix_matrix[N][N];
+
+int mult_matrix(fix_matrix a, int i, fix_matrix b, int j) {
+    int idx = 0;
+    int rst = 0;
+    for (idx = 0; idx < N; idx++) {
+        rst += a[i][idx] * b[idx][j];
+    }
+    return rst;
+}
+```
+
+ 对于优化等级为 -O1 时，gcc 会将这个 for 循环优化
+
+```assembly
+mult_matrix:
+    movslq  %esi, %rsi	# 将 i 符号扩展
+    salq    $6, %rsi	# 将 i 左移 6 位，得到 64 * i
+    addq    %rsi, %rdi	# 得到 a + 64i(还是一个地址，此时 %rdi 指向了 a 矩阵的第 i 行的第一个元素) 
+    movslq  %ecx, %rcx	# 将 j 符号扩展
+    leaq    (%rdx,%rcx,4), %rdx	# %rdx = %rdx + 4 * %rcx(还是一个地址，此时 %rdx 指向了 b 矩阵第一行的第 j 个元素)
+    leaq    1024(%rdx), %rsi	# %rsi 为一个地址大小为 %rdx + 1024(4 * 16 * 16)(此时 %rsi 指向了 b 矩阵同列下的合法值的下一行)
+    movl    $0, %eax
+.L2:
+    movl    (%rdi), %ecx	# 第 10，11 计算了 a[i][idx] * b[idx][j]
+    imull   (%rdx), %ecx
+    addl    %ecx, %eax		
+    addq    $4, %rdi	# %rdi 步进值为 4 为 int 类型的大小
+    addq    $64, %rdx	# %rdx 步进值为 64 为一行 int 类型的大小
+    cmpq    %rsi, %rdx	# 比较 %rdx 和 %rsi 的大小
+    jne     .L2
+    rep ret
+```
+
+可以看到 gcc 针对定长数组，将 for 循环优化为 do-while 循环，因为数组的大小为固定值，所以指针的步进单位在方法调用前就可以确定，在汇编文件中以常数的形式呈现
+
+### 变长数组
+
+然而我们一般更多使用的所谓的 "变长数组"，还是上面的乘积的例子，现在使用变长数组
+
+```c
+int mult_matrix(int n, int a [n][n], int i, int b [n][n], int j) {
+        int idx = 0;
+        int rst = 0;
+        for (idx = 0; idx < n; idx++) {
+                rst += a[i][idx] * b[idx][j];
+        }
+        return rst;
+}
+```
+
+```assembly
+mult_matrix:
+        movslq  %edi, %rax	# %rax = n
+        testl   %edi, %edi	# 判断 n 的大小
+        jle     .L4
+        leaq    0(,%rax,4), %r9	# %r9 = 4n
+        movslq  %edx, %rdx
+        salq    $2, %rdx	# %rdx = 4 * i
+        imulq   %rax, %rdx	# %rdx = %rdx * n(%rdx = 4 * i * n)
+        addq    %rdx, %rsi	# %rsi = %rsi + %rdx(此时 %rsi 指向 a 矩阵第 i 行 第 1 列)
+        movslq  %r8d, %r8
+        leaq    (%rcx,%r8,4), %rcx	# %rcx = %rcx + 4 * j(此时 %rcx 指向 b 矩阵第一行第 j 列)
+        leal    -1(%rdi), %eax	# %eax = n - 1
+        leaq    4(%rsi,%rax,4), %rdi	# %rdi = %rsi + 4(n - 1) + 4 = %rsi + 4n
+        movl    $0, %eax
+.L3:
+        movl    (%rsi), %edx	# 常规的乘法后步进，a 步进的单位为 4，b 步进的单位为 4n
+        imull   (%rcx), %edx
+        addl    %edx, %eax
+        addq    $4, %rsi
+        addq    %r9, %rcx
+        cmpq    %rdi, %rsi	# 比较 %rsi(a 的指针) 和 %rdi(a 矩阵遍历的终点)
+        jne     .L3
+        rep ret
+.L4:
+        movl    $0, %eax
+        ret
+```
+
+总之 gcc 还是将其优化为了 do-while 循环，只不过现在步进的单位不再是确定的，需要通过参数 n 确定
+
+访问数组底层就是根据内存地址和变量类型访问
+
+## 结构体
+
+这里其实关于结构体的介绍，更像是介绍 c 语言的一种特性了
+
+结构体可以将多种不同类型的对象(就是变量)聚合到一个对象(变量)中，结构体内部的所有变量保存在内存中连续的区域中，指向结构体的指针就是指向了结构体内部第一个变量的指针(看上去和数组类似，只不过数组中保存的是同种类型的变量，而结构体可以保存不同类型的)
+
+gcc 在编译时维护了结构体内部的类型信息，包括了每种变量类型在结构体内部的偏移量(下文为了说明都是以字节为单位)，通过偏移地址引用变量
+
+举个例子，现在有一个结构体：
+
+```c
+struct rec{
+    int i;
+    int j;
+    int a[2];
+    int *p;
+}
+```
+
+那么其在内存中的保存为：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/memory_model_of_struct_rec.png)
+
+可以看到结构体内部的内存结构很紧凑(但这不是必然的，有时为了对齐填充 gcc 会在结构体内部插入空白的字节)
+
+知道了内存中的结构，那么自然就可以通过指针随机对结构体内部的变量进行读写了
+
+## 联合
+
+区别于结构体，联合内部针对的是互斥的变量，不然会重复覆盖，举个例子说明：
+
+```c
+struct s3{
+    char c;
+    int i[2];
+    double v;
+}
+union u3{
+    char c;
+    int i[2];
+    double v;
+}
+```
+
+看起来写法是一样的，但是二者的内存结构很不一样，二者的变量在内存中的起始偏移如下
+
+| 类型 |  c   |  i   |  v   | 大小 |
+| :--: | :--: | :--: | :--: | :--: |
+|  s3  |  0   |  4   |  16  |  24  |
+|  s3  |  0   |  0   |  0   |  8   |
+
+可以看到联合体内部的变量的偏移地址都是 0，这意味着**使用联合体中的某个变量会把其他变量覆盖掉**，因此联合体内部的变量一般是互斥的
+
+借助联合体的特点，可以对结构体进行改造以减小其空间占用
+
+比如一个二叉树，考虑非叶子节点不具有 val，那么使用结构体可以将其声明为：
+
+```c
+struct node_s{
+    node_s *left;
+    node_s *right;
+   	double val[2];
+};
+```
+
+默认一个 node 的大小为 32 Bytes
+
+两个子节点和 val 是互斥的关系，所以可以使用联合体减少空间占用
+
+```c
+union node_u {
+    struct {
+        union node_u *left;
+        union node_u *right;
+    } children;
+    double val[2];
+};
+```
+
+这样表示二叉树的一个节点默认仅需要 16 Bytes 的空间了
+
+然而这样编码是有问题的，因为我们无法知道一个节点是否为叶子节点，因此可以使用枚举类型进行优化
+
+```c
+typedef enum {LEAF, INTERNAL} node_t;
+struct node_s_u {
+    node_t type;
+    union {
+        struct{
+            struct node_s_u *left;
+            struct node_s_u *right;
+        } children;
+        double val[2];
+    } info;
+};
+```
+
+现在看起来就很完美了，一共占用 4 Bytes(enum 占用 4 个字节) + 4 Bytes(对齐填充) + 16 Bytes(info 联合体) = 24 Bytes
+
+但是这样做严重的增加了编码的复杂性，一个简单的二叉树的节点居然使用**结构体套联合体套结构体**多层嵌套的形式，在要是其他的什么我都不敢想了
+
+仅仅少了 8 Bytes 就需要让编码变得这么复杂，在我看来有点不值
+
+得益于联合体内部的变量都是从统一地址偏移的特性，可以通过访问其他类型变量，修改当前变量 bit 位模式
+
+一个简单的例子就是上面最开始的那个例子，通过修改变量 c 可以修改 double 类型的 v 的低 8 位的位模式
+
+## 数据对齐问题
+
+x86_64 并没有严格要求数据对齐，但在数据对齐的情况下，具有更好的性能
+
+数据对齐的基本原则是，大小为 K 字节的变量，其地址必须是 K 的倍数(像是 int 类型变量保存地址必须是 4 的倍数才行)
+
+编译器在编译时有的时候会添加命令，保证数据的对齐，比如在当时说[switch](#switch)，本质上使用了跳转表，而在<a href="jump_table_in_assembly">汇编代码的跳转表部分</a>，看到伪指令 .align 8，这表明了后面的数据大小都是 8 Bytes，需要位于地址为 8 的倍数处
+
+考虑一个结构体：
+
+```c
+struct s1{
+    int i,
+    char c,
+    int j,
+};
+```
+
+如果不考虑数据填充，那么其内存中的结构如下
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/memory_model_of_struct_s1_without_alignment.png)
+
+看起来这个结构体占用的大小为 9 Bytes，但实际编译器会在编译的时候填充数据，最终内存结构如下：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/memory_model_of_struct_s1_with_alignment.png)
+
+如果重新回看结构体，显然可以通过重新排列变量的方式实现小的空间占用：
+
+```c
+struct s1{
+    int i,
+    int j,
+    char c
+}
+```
+
+此时实际占用的空间将减小到 9 Bytes，如果这样就可以优化就好了，呵呵
+
+然而实际编译器需要保证结构体数组也具有对齐的特性，所以在**结构体的结尾也需要补齐填充**，使得数组中的下一个结构体其起始地址也需要满足对齐的要求
+
+## bomb lab
+
+一共 6 个阶段，就是 6 个字符串
+
+主要的命令可以从书中参考到
+
+<img id="gdb_operations" src="https://cdn.jsdelivr.net/gh/SunYuanI/img/img/gdb_commands.png"/>
+
+首先看一看 bomb.c，注释一定要看看，如果启动 bomb 的时候不带参数，那么默认的话会从标准输入中读取字符串
+
+<a id="bomb.c"></a>
+
+```c
+/* Hmm...  Six phases must be more secure than one phase! */
+input = read_line();             /* Get input                   */
+phase_1(input);                  /* Run the phase               */
+phase_defused();                 /* Drat!  They figured it out!
+                      * Let me know how they did it. */
+printf("Phase 1 defused. How about the next one?\n");
+
+/* The second phase is harder.  No one will ever figure out
+     * how to defuse this... */
+input = read_line();
+phase_2(input);
+phase_defused();
+printf("That's number 2.  Keep going!\n");
+
+/* I guess this is too easy so far.  Some more complex code will
+     * confuse people. */
+input = read_line();
+phase_3(input);
+phase_defused();
+printf("Halfway there!\n");
+
+/* Oh yeah?  Well, how good is your math?  Try on this saucy problem! */
+input = read_line();
+phase_4(input);
+phase_defused();
+printf("So you got that one.  Try this one.\n");
+
+/* Round and 'round in memory we go, where we stop, the bomb blows! */
+input = read_line();
+phase_5(input);
+phase_defused();
+printf("Good work!  On to the next...\n");
+
+/* This phase will never be used, since no one will get past the
+     * earlier ones.  But just in case, make this one extra hard. */
+input = read_line();
+phase_6(input);
+phase_defused();
+```
+
+可以看到一共 6 个阶段，每次读取一行输入作为一个阶段的输入，然后进入这个阶段，我们需要反编译的就是 phase_1 到 phase_6 一共 6 个函数
+
+>   如果反编译 bomb，还可以发现 secret_phase，算是附加题彩蛋吧
+
+首先运行 gdb
+
+```shell
+$ gdb bomb
+```
+
+### phase_1
+
+首先打断点，然后运行：
+
+```shell
+(gdb) break phase_1
+Breakpoint 1 at 0x400ee0
+(gdb) run
+Welcome to my fiendish little bomb. You have 6 phases with
+which to blow yourself up. Have a nice day!
+
+```
+
+因为我们可不知道这里应该输入什么，所以先随便输入看看，假如输入 123，然后反编译
+
+```shell
+Breakpoint 1, 0x0000000000400ee0 in phase_1 ()
+(gdb) disas
+Dump of assembler code for function phase_1:
+=> 0x0000000000400ee0 <+0>:     sub    $0x8,%rsp	
+   0x0000000000400ee4 <+4>:     mov    $0x402400,%esi
+   0x0000000000400ee9 <+9>:     callq  0x401338 <strings_not_equal>
+   0x0000000000400eee <+14>:    test   %eax,%eax
+   0x0000000000400ef0 <+16>:    je     0x400ef7 <phase_1+23>
+   0x0000000000400ef2 <+18>:    callq  0x40143a <explode_bomb>
+   0x0000000000400ef7 <+23>:    add    $0x8,%rsp
+   0x0000000000400efb <+27>:    retq
+End of assembler dump.
+```
+
+首先要注意的是，我们的输入根据上面 bomb.c 中的样式，作为第一个参数在 phase_1 中会保存在寄存器 %rdi 中
+
+>   寄存器保存参数的次序问题看[数据传送](#数据传送)
+
+证实一下，打印一下 %rdi 的值
+
+```shell
+(gdb) print $rdi
+$1 = 6305664
+(gdb) print /x $rdi
+$2 = 0x603780
+```
+
+可以看到 %rdi 中保存的是地址，因为我们输入了 abc 三个字符，可以通过 gdb x/s [Addr] 可以查看对应地址处的字符串
+
+```shell
+(gdb) x/s $rdi
+0x603780 <input_strings>:       "123"
+```
+
+这里调用了函数 strings_not_equal，然后判断返回值(保存在 %rax 中)是否为 0，如果为 0 函数结束，否则调用炸弹函数
+
+在调用函数之前为 %rsi 也进行了赋值，也是一个地址，这里假设 %rsi 对应地址处也存储了一个字符串，查看一下 %rsi 处保存的字符串
+
+```shell
+(gdb) stepi 2	# 先让程序运行两步
+0x0000000000400ee9 in phase_1 ()
+(gdb) x/s $rsi
+0x402400:       "Border relations with Canada have never been better."
+```
+
+看来我们确实猜对了，现在就可以中断程序，重新输入 Border relations with Canada have never been better. (注意结尾有 .)
+
+```shell
+(gdb) kill
+```
+
+#### strings_not_equal
+
+到了这一步其实 phase_1 就已经结束了，可以进行 phase_2 了，但为了验证猜想，后面的内容是关于 strings_not_equal 函数的部分
+
+```shell
+(gdb) stepi
+0x0000000000401338 in strings_not_equal ()
+(gdb) disas
+Dump of assembler code for function strings_not_equal:
+=> 0x0000000000401338 <+0>:     push   %r12
+   0x000000000040133a <+2>:     push   %rbp
+   0x000000000040133b <+3>:     push   %rbx
+   0x000000000040133c <+4>:     mov    %rdi,%rbx	# 我们输入字符串的地址
+   0x000000000040133f <+7>:     mov    %rsi,%rbp	# 汇编代码中字符串的地址
+   0x0000000000401342 <+10>:    callq  0x40131b <string_length>	# 从名字上看，首先是核实了一下两个字符串的长度
+   0x0000000000401347 <+15>:    mov    %eax,%r12d
+   0x000000000040134a <+18>:    mov    %rbp,%rdi
+   0x000000000040134d <+21>:    callq  0x40131b <string_length>
+   0x0000000000401352 <+26>:    mov    $0x1,%edx
+   0x0000000000401357 <+31>:    cmp    %eax,%r12d	# 如果两个字符串不一样长直接跳转到 +99 地址处，此时会把 1 赋给 %rax 后直接返回
+   0x000000000040135a <+34>:    jne    0x40139b <strings_not_equal+99>	
+   # ....	这里省略一下不重要
+   0x000000000040139b <+99>:    mov    %edx,%eax
+   0x000000000040139d <+101>:   pop    %rbx
+   0x000000000040139e <+102>:   pop    %rbp
+   0x000000000040139f <+103>:   pop    %r12
+   0x00000000004013a1 <+105>:   retq
+End of assembler dump.
+```
+
+现在看看 string_length 函数
+
+```shell
+Dump of assembler code for function string_length:
+=> 0x000000000040131b <+0>:     cmpb   $0x0,(%rdi)	# %rdi 对应的地址处存储的是不是 0
+   0x000000000040131e <+3>:     je     0x401332 <string_length+23>	# 如果是 0，表示字符串的结尾，直接跳转到 +23 的地方
+   0x0000000000401320 <+5>:     mov    %rdi,%rdx	# 从这里开始到 +19 的地方结束，表示一个 do-while 循环，从 %rdi 处开始
+   													# 不断移动指针，知道指针指向的位置为 0
+   0x0000000000401323 <+8>:     add    $0x1,%rdx
+   0x0000000000401327 <+12>:    mov    %edx,%eax
+   0x0000000000401329 <+14>:    sub    %edi,%eax
+   0x000000000040132b <+16>:    cmpb   $0x0,(%rdx)
+   0x000000000040132e <+19>:    jne    0x401323 <string_length+8>
+   0x0000000000401330 <+21>:    repz retq
+   0x0000000000401332 <+23>:    mov    $0x0,%eax
+   0x0000000000401337 <+28>:    retq
+End of assembler dump.
+```
+
+其实上面说的还不是很明确，在 c 中默认会在字符串结尾处添加字符 '\0'，表示字符串结尾
+
+现在已经很明确了，strings_not_equals 函数调用了 string_length 比较 %rdi 和 %rsi 中两个字符串的长度，如果不相等直接返回 1
+
+如果相等的话：
+
+```shell
+Dump of assembler code for function strings_not_equal:
+   # 接到上面 strings_not_equal 的 +34 的位置
+   0x000000000040135c <+36>:    movzbl (%rbx),%eax	# 结合上面的内容，现在 %rbx 为第一个字符串的地址，%rbp 为第二个字符串的地址
+   0x000000000040135f <+39>:    test   %al,%al	# 在两个字符串都相等的情况下，看看两个字符串是不是长度都是 0 
+   												# 如果字符串长度为 0 就跳转到 +80 的地方(将 %rdx 赋值为 0，然后跳转到 +99 的地方)
+   0x0000000000401361 <+41>:    je     0x401388 <strings_not_equal+80>
+   0x0000000000401363 <+43>:    cmp    0x0(%rbp),%al	# 从这个位置到 +71 的位置还是一个 do_while 循环
+   														# 判断两个字符串对应字符处是否相等
+   0x0000000000401366 <+46>:    je     0x401372 <strings_not_equal+58>
+   0x0000000000401368 <+48>:    jmp    0x40138f <strings_not_equal+87>
+   0x000000000040136a <+50>:    cmp    0x0(%rbp),%al
+   0x000000000040136d <+53>:    nopl   (%rax)
+   0x0000000000401370 <+56>:    jne    0x401396 <strings_not_equal+94>
+   0x0000000000401372 <+58>:    add    $0x1,%rbx
+   0x0000000000401376 <+62>:    add    $0x1,%rbp
+   0x000000000040137a <+66>:    movzbl (%rbx),%eax
+   0x000000000040137d <+69>:    test   %al,%al
+   0x000000000040137f <+71>:    jne    0x40136a <strings_not_equal+50>
+   0x0000000000401381 <+73>:    mov    $0x0,%edx
+   0x0000000000401386 <+78>:    jmp    0x40139b <strings_not_equal+99>
+   0x0000000000401388 <+80>:    mov    $0x0,%edx
+   0x000000000040138d <+85>:    jmp    0x40139b <strings_not_equal+99>
+   0x000000000040138f <+87>:    mov    $0x1,%edx
+   0x0000000000401394 <+92>:    jmp    0x40139b <strings_not_equal+99>
+   0x0000000000401396 <+94>:    mov    $0x1,%edx
+```
+
+剩下的部分，在有了前面的背景后应该都很好理解了
+
+在看完了 strings_not_equal 后，更加肯定了，这就是一个判断字符串是否相等的函数，同时我们也确定了 phase_1 的答案就是：Border relations with Canada have never been better.
+
+### phase_2
+
+首先删除之前的断点，并为 phase_2 打断点
+
+```shell
+(gdb) delete
+Delete all breakpoints? (y or n) y
+(gdb) break phase_2
+Breakpoint 2 at 0x400efc
+```
+
+还是一样运行后随便输入 phase_2 阶段的字符串
+
+```shell
+(gdb) run
+Starting program: /home/buzz/csapp/bomb/bomb
+Welcome to my fiendish little bomb. You have 6 phases with
+which to blow yourself up. Have a nice day!
+Border relations with Canada have never been better.
+Phase 1 defused. How about the next one?
+123
+
+Breakpoint 2, 0x0000000000400efc in phase_2 ()
+(gdb) disas
+Dump of assembler code for function phase_2:
+=> 0x0000000000400efc <+0>:     push   %rbp	# 保存 %rbp 和 %rbx 这两个是被调用者保存寄存器，所以 phase_2 中进行保存
+   0x0000000000400efd <+1>:     push   %rbx
+   0x0000000000400efe <+2>:     sub    $0x28,%rsp	# 为栈分配 40 个字节的空间注意 0x28 对应的就是 40
+   0x0000000000400f02 <+6>:     mov    %rsp,%rsi	# 将 %rsp 的值赋给 %rsi
+   0x0000000000400f05 <+9>:     callq  0x40145c <read_six_numbers>	# 调用函数 read_six_numbers
+   # ... 后面的先不看
+End of assembler dump.
+```
+
+首先这里两个 push，保存了被调用者保存寄存器中的值，这个参考[保存寄存器中的值](#保存寄存器中的值)
+
+紧接着分配了 40 个字节的栈空间，并将栈顶指针 %rsp 的值赋给 %rsi，并调用了方法 read_six_numbers
+
+从名字上是说从读取 6 个数字，这里猜测是从我们输入的 %rdi 指向的字符串中读取 6 个数字，而又因为分配了占用空间，并将栈顶指针作为参数进行了方法调用，这里推测可能是将读取到的 6 个数字放到了栈空间中
+
+因为 40 个字节的栈空间是无法保存 6 个 8 Bytes 大小的数据的，因此这里猜测栈中保存的数据大小是 4 Bytes，一共占据了 24 Bytes
+
+具体的需要进入 read_six_numbers 中看看才行
+
+```shell
+Dump of assembler code for function read_six_numbers:
+=> 0x000000000040145c <+0>:     sub    $0x18,%rsp
+   0x0000000000401460 <+4>:     mov    %rsi,%rdx
+   0x0000000000401463 <+7>:     lea    0x4(%rsi),%rcx
+   # ... 后面先不看
+End of assembler dump.
+```
+
+#### read_six_numbers
+
+如果假设原来栈顶的值为 %rsp，在这个函数的开始，继续分配了栈空间，大小为 24 Bytes，此时栈顶为 %rsp - 24(记作 %rsp')
+
+前面三个指令后：%rdx = %rsp；%rcx = %rsp + 4
+
+```shell
+Dump of assembler code for function read_six_numbers:
+   # ...
+   0x0000000000401467 <+11>:    lea    0x14(%rsi),%rax	# %rax = %rsp + 20
+   0x000000000040146b <+15>:    mov    %rax,0x8(%rsp)	# %rsp' + 8 处保存地址 %rsp + 20
+   0x0000000000401470 <+20>:    lea    0x10(%rsi),%rax	# %rax = %rsp + 16
+   0x0000000000401474 <+24>:    mov    %rax,(%rsp)		# %rsp' 处保存着地址 %rsp + 16
+   0x0000000000401478 <+28>:    lea    0xc(%rsi),%r9	
+   0x000000000040147c <+32>:    lea    0x8(%rsi),%r8
+   # ... 后面的操作先不看
+End of assembler dump. 
+```
+
+进行了这些指令后 %r9 = %rsp + 12；%r8 = %rsp + 8
+
+现在让我们回顾一下，%rdx，%rcx，%r8，%9 在完成了上述操作后，分别指向了 %rsp、%rsp + 4、%rsp + 8、%rsp + 16
+
+还记得上面说过的，read_six_numbers 从名字上看很有可能读取 6 个数字，而因为栈顶地址被作为参数传了进来，所以很大概率从输入上读取到的 6 个数字会被放入栈中，有根据栈的大小推测，放置的数据的大小为 4 Bytes
+
+而在这里，我们看到了一组熟悉的寄存器，%rdx，%rcx，%r8，%9，根据前面[数据传送](#数据传送)部分，这些寄存器中的值都是作为方法参数的，而现在又每隔 4 个为他们各自分配了一个地址，这应该不是巧合
+
+而在 %rsp' 和 %rsp' + 8 处也保存这两个地址，分别指向了 %rsp + 16 和 %rsp + 20 处
+
+>   如果还没看出点问题的话也不需要着急，接着往后看
+
+#### sscanf
+
+```shell
+Dump of assembler code for function read_six_numbers:
+   # ...
+   0x0000000000401480 <+36>:    mov    $0x4025c3,%esi
+   0x0000000000401485 <+41>:    mov    $0x0,%eax
+   0x000000000040148a <+46>:    callq  0x400bf0 <__isoc99_sscanf@plt>
+   0x000000000040148f <+51>:    cmp    $0x5,%eax
+   0x0000000000401492 <+54>:    jg     0x401499 <read_six_numbers+61>
+   0x0000000000401494 <+56>:    callq  0x40143a <explode_bomb>
+   0x0000000000401499 <+61>:    add    $0x18,%rsp
+   0x000000000040149d <+65>:    retq
+End of assembler dump. 
+```
+
+这里面一上来就给 %rsi 赋了一个地址
+
+>   注意虽然反编译中写的是给 %esi 赋值，但实际在 x86_64 中(低) 32 位的操作，默认会将高 32 位置零，所以其实可以将上面的 mov 指令的 destination 理解为 %rsi
+
+紧接着就开始调用函数了，这个函数是 sscanf，这个函数的第一个参数是一个字符串，第二个参数是 format，即按照一个 format 读取字符串
+
+>   可以参考这个[C 库函数 – sscanf() | 菜鸟教程 (runoob.com)](https://www.runoob.com/cprogramming/c-function-sscanf.html)
+
+这么看来 %rsi 对应的应该也是一个字符串，毕竟他可是代表了读取字符串的格式，这还不看看
+
+```
+(gdb) x/s $rsi
+0x4025c3:       "%d %d %d %d %d %d"
+```
+
+这下就放心了 read_six_numbers 就是读取了 6 个 int 类型的整数，而又因为我们这里 format 的格式，确定了当前情况下调用 sscanf 一定还需要 6 个额外的参数(指针)，用来保存从字符串中读取到的数据
+
+所以现在 sscanf 函数一共需要 8 个参数：1 个字符串、1 个 format、6 个 int 类型指针
+
+根据参数和寄存器的对应关系，有：
+
+*   %rdi 保存最开始的字符串
+*   %rsi 保存 format
+*   %rdx 保存读取到的第一个数字
+*   %rcx 保存读取到的第二个数字
+*   %r8 保存读取到的第三个数字
+*   %r9 保存读取到的第四个数字
+
+看起来还差两个，我们知道如果参数过多的情况下，会使用栈空间保存参数，还记得刚才在 %rsp' 和 %rsp' + 8 保存的两个参数吗，他们分别指向了 %rsp + 16 和 %rsp + 20，现在我们知道了最后两个 int 指针保存在了栈空间中
+
+sscanf 方法的返回值是字符串中满足 format 读取到的数据的个数，根据上面的汇编代码，sscanf 结束后就让 %rax 和 5 进行比较，只要 %rax $\leq$ 5，就直接调用 expload，因此我们必须输入 6 个整数
+
+所以 **read_six_numbers 方法就是读取了 6 个整数，并将它们保存在 %rsp、%rsp + 4、%rsp + 8、%rsp + 12、%rsp + 16、%rsp + 20 处**
+
+#### 重新回到phase_2
+
+```shell
+Breakpoint 2, 0x0000000000400efc in phase_2 ()
+(gdb) disas
+Dump of assembler code for function phase_2:
+   # ...
+=> 0x0000000000400f0a <+14>:    cmpl   $0x1,(%rsp)	# 将读到的第一个整数和 1 比较，只要不相等就爆炸
+   0x0000000000400f0e <+18>:    je     0x400f30 <phase_2+52>
+   0x0000000000400f10 <+20>:    callq  0x40143a <explode_bomb>
+   0x0000000000400f15 <+25>:    jmp    0x400f30 <phase_2+52>	# 第一个整数为 1 时直接跳转到 +52 处
+   0x0000000000400f17 <+27>:    mov    -0x4(%rbx),%eax
+   0x0000000000400f1a <+30>:    add    %eax,%eax
+   0x0000000000400f1c <+32>:    cmp    %eax,(%rbx)
+   0x0000000000400f1e <+34>:    je     0x400f25 <phase_2+41>
+   0x0000000000400f20 <+36>:    callq  0x40143a <explode_bomb>
+   0x0000000000400f25 <+41>:    add    $0x4,%rbx
+   0x0000000000400f29 <+45>:    cmp    %rbp,%rbx
+   0x0000000000400f2c <+48>:    jne    0x400f17 <phase_2+27>
+   0x0000000000400f2e <+50>:    jmp    0x400f3c <phase_2+64>
+   0x0000000000400f30 <+52>:    lea    0x4(%rsp),%rbx	# %rbx = %rsp + 4
+   0x0000000000400f35 <+57>:    lea    0x18(%rsp),%rbp	# %rbp = %rsp + 24(对应了最后一个整数的下一个地址，这是一个非法地址)
+   0x0000000000400f3a <+62>:    jmp    0x400f17 <phase_2+27>
+   0x0000000000400f3c <+64>:    add    $0x28,%rsp
+   0x0000000000400f40 <+68>:    pop    %rbx
+   0x0000000000400f41 <+69>:    pop    %rbp
+   0x0000000000400f42 <+70>:    retq
+End of assembler dump.
+```
+
+从 +27 到 +48 是一个 do-while 循环，+52 和 +57 起到了为这个 do-while 循环初始化的作用
+
+每轮循环都是将前一个整数的倍数和后一个整数比较，第一轮循环时就是比较第一个整数的二倍和第二个整数的关系，只要不相等就爆炸
+
+while 结尾的条件是 %rbx 达到非法值 %rbp
+
+因此整数之间的关系必须是 2 倍的关系，而第一个整数又必须是 1，所以 phase_2 的 6 个整数为 1 2 4 8 16 32
+
+### phase_3
+
+还一样的，先输入 123，进入断点再说
+
+```shell
+(gdb) disas
+Dump of assembler code for function phase_3:
+=> 0x0000000000400f43 <+0>:     sub    $0x18,%rsp
+   0x0000000000400f47 <+4>:     lea    0xc(%rsp),%rcx
+   0x0000000000400f4c <+9>:     lea    0x8(%rsp),%rdx
+   0x0000000000400f51 <+14>:    mov    $0x4025cf,%esi
+   0x0000000000400f56 <+19>:    mov    $0x0,%eax
+   0x0000000000400f5b <+24>:    callq  0x400bf0 <__isoc99_sscanf@plt>
+   0x0000000000400f60 <+29>:    cmp    $0x1,%eax
+   0x0000000000400f63 <+32>:    jg     0x400f6a <phase_3+39>
+   0x0000000000400f65 <+34>:    callq  0x40143a <explode_bomb>
+   # ... 后面先不看
+End of assembler dump.
+```
+
+这里又分配了栈空间，大小为 24 Bytes，并且 %rcx = %rsp + 12，%rdx = %rsp + 8
+
+随后给 %rsi 赋了一个地址，并且调用函数 sscanf(忘了 sscanf，[回去看](#sscanf))，因为 %rdi，没动过，根据前面的 <a href="#bomb.c">bomb.c</a>，显然 %rdi 就是我们的输入字符串，%rsi 就是 format，那就不得不看看这个 format 到底是什么了
+
+```shell
+(gdb) x/s $rsi
+0x4025cf:       "%d %d"
+```
+
+好了，现在我们知道了读取的是两个整数，而前面又给 %rdx 和 %rcx 指明了地址，那么这个 sscanf 就是把输入的两个整数放在栈中 %rsp + 8 和 %rsp + 12 的地方
+
+继续往后看
+
+```shell
+(gdb) disas
+Dump of assembler code for function phase_3:
+   # ...
+   0x0000000000400f5b <+24>:    callq  0x400bf0 <__isoc99_sscanf@plt>
+   0x0000000000400f60 <+29>:    cmp    $0x1,%eax	# 如果读到的参数个数比两个少就爆炸
+   0x0000000000400f63 <+32>:    jg     0x400f6a <phase_3+39>
+   0x0000000000400f65 <+34>:    callq  0x40143a <explode_bomb>
+   0x0000000000400f6a <+39>:    cmpl   $0x7,0x8(%rsp)	# 比较读到的第一个数和 7 的大小关系，如果比 7 大(或者是负数)，就爆炸
+   0x0000000000400f6f <+44>:    ja     0x400fad <phase_3+106>
+   # 后面先不看
+   0x0000000000400fad <+106>:   callq  0x40143a <explode_bomb>
+   # 后面先不看
+End of assembler dump.
+```
+
+这里面注意，我们读到的数的格式 %d 表示的是 int，是包括负数的，但是他比较的时候使用的是 ja，即无符号的条件跳转，这样如果读到的数为负数，那么将其转化为无符号数时，将被编码为一个很大的数，自然也会跳转
+
+这种 ja 很巧妙的限制了输入的边界，**仅通过一个比较同时限制了输入的上边界和下边界**
+
+说明我们输入的第一个数的范围：0 $\leq$ arg1 $\leq$ 7
+
+继续往后看
+
+```shell
+(gdb) disas
+Dump of assembler code for function phase_3:
+   # ...
+   0x0000000000400f71 <+46>:    mov    0x8(%rsp),%eax	# 将输入的第一个整数赋给了 %rax
+   0x0000000000400f75 <+50>:    jmpq   *0x402470(,%rax,8)
+   # 后面先不看
+End of assembler dump.
+```
+
+这是一个[间接跳转](#jmp)，跳转地址从 * 后面表示的地址中取，比如在这个例子中我们的跳转地址就从 0x402470 + 8 * %rax 中取出，**一定要注意，这条指令不是说跳转地址就是 0x402470 + 8 * %rax，而是从这个地址处取出跳转地址**
+
+根据上面的限制，我们知道第一个参数范围从 0 到 7 一共八个值，那么正常情况下就对应了 8 个地址，现在将这 8 个地址打印一下：
+
+```shell
+(gdb) print /x * (long *)(0x402470)	# 此时 arg1 为 0
+$3 = 0x400f7c
+(gdb) print /x * (long *)(0x402478)	# 此时 arg1 为 1
+$4 = 0x400fb9
+(gdb) print /x * (long *)(0x402480) # 此时 arg1 为 2
+$5 = 0x400f83
+(gdb) print /x * (long *)(0x402488) # 此时 arg1 为 3
+$6 = 0x400f8a
+(gdb) print /x * (long *)(0x402490) # 此时 arg1 为 4
+$7 = 0x400f91
+(gdb) print /x * (long *)(0x402498) # 此时 arg1 为 5
+$8 = 0x400f98
+(gdb) print /x * (long *)(0x4024a0) # 此时 arg1 为 6
+$9 = 0x400f9f
+(gdb) print /x * (long *)(0x4024a8) # 此时 arg1 为 7
+$10 = 0x400fa6
+```
+
+>   print 表示打印输出；/x 表示以十六进制的方式输出；第一个 * 表示从地址中取值；(long *) 表示取出 8 个字节；最后一个括号内为基址
+>
+>   这个指令在前面的<a href="#gdb_operations">指令图</a>中是有的
+
+再回头看看反汇编指令：
+
+```shell
+(gdb) disas
+Dump of assembler code for function phase_3:
+   # ...
+   0x0000000000400f7c <+57>:    mov    $0xcf,%eax	# arg1 为 0 跳转到这里
+   0x0000000000400f81 <+62>:    jmp    0x400fbe <phase_3+123>
+   0x0000000000400f83 <+64>:    mov    $0x2c3,%eax	#arg1 为 2 跳转到这里
+   0x0000000000400f88 <+69>:    jmp    0x400fbe <phase_3+123>
+   0x0000000000400f8a <+71>:    mov    $0x100,%eax	#arg1 为 3 跳转到这里
+   0x0000000000400f8f <+76>:    jmp    0x400fbe <phase_3+123>
+   0x0000000000400f91 <+78>:    mov    $0x185,%eax	#arg1 为 4 跳转到这里
+   0x0000000000400f96 <+83>:    jmp    0x400fbe <phase_3+123>
+   0x0000000000400f98 <+85>:    mov    $0xce,%eax	#arg1 为 5 跳转到这里
+   0x0000000000400f9d <+90>:    jmp    0x400fbe <phase_3+123>
+   0x0000000000400f9f <+92>:    mov    $0x2aa,%eax	#arg1 为 6 跳转到这里
+   0x0000000000400fa4 <+97>:    jmp    0x400fbe <phase_3+123>
+   0x0000000000400fa6 <+99>:    mov    $0x147,%eax	#arg1 为 7 跳转到这里
+   0x0000000000400fab <+104>:   jmp    0x400fbe <phase_3+123>
+   0x0000000000400fad <+106>:   callq  0x40143a <explode_bomb>
+   0x0000000000400fb2 <+111>:   mov    $0x0,%eax
+   0x0000000000400fb7 <+116>:   jmp    0x400fbe <phase_3+123>
+   0x0000000000400fb9 <+118>:   mov    $0x137,%eax	# arg1 为 1 跳转到这里
+   0x0000000000400fbe <+123>:   cmp    0xc(%rsp),%eax
+   0x0000000000400fc2 <+127>:   je     0x400fc9 <phase_3+134>
+   0x0000000000400fc4 <+129>:   callq  0x40143a <explode_bomb>
+   0x0000000000400fc9 <+134>:   add    $0x18,%rsp
+   0x0000000000400fcd <+138>:   retq
+End of assembler dump.
+```
+
+因为分支比较多，我们以 arg1 为 0 为例子：此后将 %rax 赋值为 0xcf(207)，并跳转到 +123，进行比较
+
+>   不知道 0xcf 是多少，就 print 0xcf
+
+比较的两个数为 %rax 和 %rsp + 12(这里存放的是 arg2，即第二个整数)，如果不相等就爆炸
+
+其他分支的情况都是类似的，phase_3 一共有 8 个解：
+
+*   arg1 = 0，arg2 = 207
+*   ...
+
+>   有了 phase_2 中 sscanf 的铺垫，phase_3 是比 phase_2 更简单的
+
+### phase_4
+
+
+
+## 省流
+
+*   phase_1:Border relations with Canada have never been better.
+
+*   phase_2:1 2 4 8 16 32
+
+*   phase_3:6 682(猜的)
+
+*   phase_4:7 0
+
+*   phase_5:ionefg
+
+*   phase_6:4 3 2 1 6 5
+
+硬要说的话其实就 2 和 6 稍微难点；2 难在想要弄明白需要知道 sscanf 函数，6 就是纯粹的太长l
+
+# 存储器层次结构
+
+## RAM
+
+分为SRAM（静态）、DRAM（动态）两种
+
+> 存储单元实现不同
+
+断电后RAM丢失存储信息：易失性的存储器
+
+## ROM
+
+非易失性，统称为只读存储器（尽管有的可读可写）
+
+闪存存在擦写次数，超出后会损坏
+
+## 访问存储
+
+数据通过总线在处理器和存储器之间传递
+
+考虑movq A, %rax，即将内存中地址为A的数据接入寄存器rax中
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/load1.png)
+
+处理器将地址A通过总线传递到主存中，主存储器读取地址，从DRAM中取数据，并通过内存总线将数据传递到处理器中
+
+处理器内部寄存器的读写耗时短（几个CPU周期）
+
+对内存的读写耗时长
+
+## 磁盘
+
+纯机械结构，读写速度慢
+
+访问时间主要取决于：
+
+* 寻道时间
+* 旋转时间
+* 传送时间
+
+> 其中传送时间较短
+
+## IO总线
+
+通过IO总线可以连接多种设备，简单的IO总线：PCI总线
+
+DMA，磁盘控制器收到处理器读命令后，直接将数据写入内存而不经过处理器，完成写入后磁盘控制器通过中断通知处理器
+
+## 程序局部性
+
+程序倾向使用地址临近最近使用过的数据的数据，或者就是最近使用过的数据本身
+
+> 加入程序访问某地址处的数据，那么短时间内，这个地址周围的数据也很有可能被访问
+
+* 时间局部性：被引用过的内存位置，在将来很可能被再次引用
+* 空间局部性：被引用过的内存位置附近，在将来很可能被引用
+
+举例：
+
+```java
+int sum = 0;
+for(int i = 0; i < array.length; i++){
+    sum += array[i];
+}
+```
+
+数组array在内存中连续存储
+
+对array[i]的引用体现了空间局限性，而对sum的引用体现了时间局限性
+
+局部性良好的程序具有更好的性能
+
+这就是为什么在遍历二维数据的时候，选择行优先遍历（先遍历完一整行再进行下一行）
+
+## 存储器层次结构
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/%E5%AD%98%E5%82%A8%E5%99%A8%E5%B1%82%E6%AC%A1%E7%BB%93%E6%9E%84.png)
+
+可以认为k层的存储设备是k+1层存储设备的缓存
+
+> 正是因为程序的局部性，可以认为缓存可以提高访问速度
+
+k+1层设备认为由连续的数据块组成，而第k层认为是较少数量块的集合（认为是k+1层的子集，所以更小，但是更快）
+
+处理器获取位于k+1层的数据d时，会先查看k层是否存在数据d，如果存在，成为缓存命中，这样访问速度会变快，反之，如果缓存未命中，则需要从第k+1层获取数据，如果k层缓存满，需要进行数据替换
+
+缓存未命中：
+
+* 冷缓存：此时缓存为空（只要访问肯定不命中）
+
+> 随着不断向缓存中添加数据，缓存warmup，热身，命中的可能性增加
+
+* 容量未命中：缓存太小了，程序需要访问的数据量大于缓存的大小
+
+> 称不断被程序访问的块为工作集，如果工作集的大小大于缓存大小，会出现容量未命中
+
+* 冲突未命中：和放置策略有关（替换策略），如果程序访问不同的块，但这些块都被映射到缓存中的同一个位置时，此时缓存会发生多次替换（尽管此时缓存大小比这些块要大）
+
+![](../img/各种缓存.png)
+
+对于寄存器作为缓存的情况，缓存的是8个字节或4个字节，对应的通过编译器管理缓存（主要是因为汇编语言直接对寄存器操作）
+
+## 高速缓存
+
+![](../img/cache_memories.png)
+
+使用SRAM实现，在CPU内部，完全由硬件实现
+
+> 由于CPU与内存性能差距变大，现在告诉缓存分为L1,L2,L3，三级缓存设计
+
+![](../img/cache_memories_general_organization.png)
+
+将整个缓存视为由$S = 2^s$个set组成，每一个组中含有$E = 2^e$个行，每一行有$B = 2^b$个字节，每一行认为是一个块 
+
+> 每一行中含有一位有效位，表示行是否有效
+>
+> 还存在标记位
+
+认为整个高速缓存的大小为：$S\times E\times B $(Bytes)
+
+ 当处理器需要从一个地址中加载数据的时候，会先查询高速缓存
+
+处理器中的地址认为由三部分构成，其中，有s位的组偏移量，用来标识地址在高速缓存中的组的索引，有t位的标记位，用来标记同一个组内，不同的行，最后的b位标记命中块内的偏移量
+
+查询时，现根据组偏移量确定地址所在的组，再根据标记位确定行，要注意的是，当标记位匹配的时候还需要确定有效位是否为1，只有同时满足时才能够匹配（称为命中），最后根据块偏移量确定数据
+
+> 未命中发生时，需要查询内存获取对应的块，并在替换策略下覆盖掉缓存中的一部分
+
+![](../img/cache_memories_summary.png)
+
+对于$E = 1$的情况，称为直接映射高速缓存
+
+> 会出现组匹配，但是因为标识位不匹配，会经常出现缓存覆盖的情况
+
+其余情况称为：$E$路组相联高速缓存
+
+极端一点，如果只有一个组的情况下，称为全相联高速缓存
+
+## 写操作
+
+* 直接写入内存
+* 写回高速缓存，直到该高速缓存要被覆盖的时候再写回内存
+
+> 就是推迟写回的时间而已
+
+为了实现延时的写回，需要一些额外的bit（dirty bit）用来标识，是否需要将要被覆盖的缓存写回内存中
+
+上述延时写回基于一个前提，即被写的块存在于高速缓存中
+
+如果write miss，那么：
+
+* 将内存中对应的数据写入高速缓存中
+
+> 根据空间局部性，不久的将来很有可能针对块再进行一次写操作
+
+* 直接写回内存
+
+不同的内存模型有不同的选择，通常：
+
+* 直接写回内存
+* 写入高速缓存，未命中时读取对应内存并写入缓存中
+
+一个实际的模型
+
+![](../img/real_cache_hierarchy.png)
+
+## 参数
+
+* 未命中率：（顾名思义）
+* 命中时间：缓存命中后，将数据从缓存传递到处理器上所需要的时间
+
+> L1缓存器命中时间为几个时钟周期
+>
+> 命中时间包括访问查询是否命中的时间
+
+* 未命中处罚：即由于未命中所需要的额外时间：对于L1级缓存，如果未命中从L2级缓存获取数据处罚时间为十几个时钟周期，L2级缓存从L3级缓存获取数据的处罚时间为50个周期，如果通过内存获取数据处罚时间为200个时间周期
+
+一个命中率为99%的缓存设计，性能为命中率为97%的二倍
+
+> 考虑命中时间为1cycle，处罚时间为100cycle，那么：
+>
+> 平均时间对于99%：1+0.01*100 = 2；
+>
+> 平均时间对于97%：1+0.03*100 = 4；
+>
+> 就离谱
+
+## cache-lab
+
+最好的参考资料是官方的说明文档：[cachelab.dvi](http://csapp.cs.cmu.edu/3e/cachelab.pdf)
+
+cache-lab 一共有两个 part，第一个 part 是写一个 cache simulator；第二个 part 是优化矩阵转置
+
+### part A
+
+这部分需要使用到 trace 文件，这个文件是通过 [Valgrind](https://valgrind.org/) 生成的，这是一个内存检测软件，可以用来诊断是否发生了内存溢出
+
+不过这个实验并不需要下载这个软件，实验的 tar 包从提供了许多的 trace 文件，最终就是利用这些文件进行评测的
+
+这个文件的内容具有如下格式：
+
+```trace
+I 0400d7d4,8
+ M 0421c7f0,4
+ L 04f6b868,8
+ S 7ff0005c8,8
+```
+
+其中 I 表示指令加载，后面紧跟的第一个参数表示地址，第二个参数表示加载大小，整个命令的意思就是从 0x0400d7d4 加载 8 个字节，将其作为下一个指令
+
+L 代表 load，表示从指定内存地址加载数据；S 代表 store，表示将数据存储到指定内存地址处；M 代表 modify，等价于先 load 一次，再 store 回对应的内存地址
+
+tar 包中还提供了一个可执行文件 csim-ref，part A 的任务是修改 csim.c 使得在相同输入的情况下 csim.c 和 csim-ref 具有相同的输出结果。 
+
+csim 在执行的时候至少需要读入 4 个参数 -s、-E、-b、-t
+
+其中参数 s、E、b，分别对应了 cache 的set、row、block 的大小；而参数 -t 对应了某个 trace 文件
+
+csim.c 的输出为 cache hit、miss、eviction 的次数
+
+>   hit 表示缓存命中、miss 表示缓存未命中、eviction 表示缓存替换的次数
+>
+>   显然当需要替换缓存之前肯定发生了一次 miss
+
+csim.c 首先根据参数 s、E、b 确定缓存的大小，然后根据指定 trace 文件执行 load、store、modify 操作，这些操作可能出现 cache 的 hit、miss、eviction；最终模拟缓存的统计的 hit、miss、eviction 个数需要和 csim-ref 相同
+
+>   当需要进行 cache 替换时，需要执行 LRU 算法
+
+LRU 会根据上次使用时间进行缓存替换，替换掉的 block 是上次使用时间最久远的缓存
+
+#### 准备工作
+
+因为输入需要根据 flag 确定参数大小，同时还需要读取指定文件，因此在准备工作阶段的任务是：读取 flag 对应的参数、按照一定规则读取文件
+
+在 unix 标准库中提供了方法 getopt 用于读取 flag，这里是参考了 [getopt(3) - Linux manual page](https://man7.org/linux/man-pages/man3/getopt.3.html) 和 [getopt() function in C to parse command line arguments - GeeksforGeeks](https://www.geeksforgeeks.org/getopt-function-in-c-to-parse-command-line-arguments/)
+
+>   一个是 linux 的手册，一个是歪果仁写的 blog
+
+getopt 方法需要三个参数：argc 表示参数个数，argv 表示参数列表(前两个参数和 main 函数一样)、第三个参数 optstring 表示一个匹配模式
+
+>   使用这个方法的时候需要引入 unistd.h;如果在 vscode 里面报错了，就引入 getopt.h
+
+这个函数具有几种返回值：
+
+*   -1：表示已经没有其他返回值了
+*   ？：表示出现了未知的 flag，此时可以通过全局变量 optopt 获取对应的位置 flag
+*   某个 flag：如果输入参数中出现了 optstring 中的某个 flag，那么这个函数的返回值即为对应的 flag，如果对应的 flag 还对应了一个参数，那么可以通过 optarg 获取对应参数的取值
+
+所以一般使用 getopt 的时候都会在一个 while 循环中进行调用，当返回值为 -1 时结束循环
+
+下面给出一个使用 getopt 的典型示例：
+
+```c
+#include <stdio.h>
+#include <unistd.h>
+#include <getopt.h>
+
+int main(int argc, char** argv) {
+
+    int flag;
+	// 典型的形式就是在 while 中不断循环
+    while ((flag=getopt(argc, argv, ":f:a")) != -1) {
+        switch (flag)
+        {
+            case 'f':
+                printf("opt is %c, val is %s\n", flag, optarg);
+                break;
+            case 'a':
+                printf("opt a is selected\n");
+                break;
+            case '?':
+                printf("unknown flag %c", optopt);
+            default:
+                break;
+        }
+    }
+}
+```
+
+注意到 f 后面紧跟了一个":"表示 f 还对应了一个参数
+
+```shell
+$ gcc -o test -g -test.c
+$ ./test -f buzz -a -b
+opt is f, val is buzz
+opt a is selected
+unknown flag b                    
+```
+
+注意到如果在 optstring 中对应的 flag 需要一个参数，而在实际输入的时候，并没有提供这个参数，那么默认也是将返回 "?" 的，为了区分这两种情况，在 optstring 的开头添加了一个 ":" 这样如果出现对应 flag 缺少参数的情况，那么 getopt 将返回 ":"
+
+其余的输入情况的话，就查看一下 linux 手册吧
+
+然后就是处理文件输入，本身 csapp 后面有一个章节讲的就是文件的读取与写入，但用的是 unix 标准库函数 open、read、write，操作起来并没有很方便
+
+这里使用的是 stdlib 中提供的函数 fopen 和 fscanf 进行打开文件和读取文件操作
+
+```c
+FILE *fopen(const char *filename, const char *mode)
+```
+
+fopen 函数需要两个参数：文件名(文件路径)和访问模式返回一个文件标识符
+
+mode 的不同取值表示了不同的访问模式：
+
+*   "r": Opens a file for reading. The file must exist.
+
+    >   只读文件
+
+*   "w": Creates an empty file for writing. If a file with the same name already exists, its content is erased and the file is considered as a new empty file.
+
+    >   创建一个新的文件，如果对应路径的文件已经存在了，那么会清空原文件
+
+*   "a": Appends to a file. Writing operations, append data at the end of the file. The file is created if it does not exist.
+
+    >   如果原始不存在文件，就创建文件；如果原始已经存在文件了，就在文件的后面添加额外字符
+
+*   "r+": Opens a file to update both reading and writing. The file must exist.
+
+    >   读写文件(文件需要存在)
+
+*   "w+": Creates an empty file for both reading and writing.
+
+    >   和 "w" 类似，现在可以读文件了
+
+*   "a+": Opens a file for reading and appending.
+
+    >   和 "a" 类似，现在可以读文件了
+
+综上，"w" 其实是一个比较危险的操作，在这个实验中，只需要 "r" 权限即可
+
+```c
+int fscanf(FILE *stream, const char *format, ...)
+```
+
+fscanf 至少需要两个参数，第一个参数为文件标识符，表示了读取的文件名，第二个参数表示读取的内容格式，这个格式和 scanf 是类似的；方法的返回值表示匹配的字符个数，匹配到文件结尾后，将返回 EOF(这是一个宏，被定义为 -1)
+
+本实验结合 fopen 和 fscanf 可以读取 trace 的指令、地址、字节大小
+
+```c
+#include <stdio.h>
+#include <getopt.h>
+#include <string.h>
+#include <stdlib.h>
+
+int main(int argc, char** argv) {
+    int opt;
+    char t[100];
+    // 使用 getopt 读取参数
+    while ((opt = getopt(argc, argv, ":t:")) != -1) {
+        switch (opt)
+        {
+            case 't':
+                strcpy(t, optarg);
+                break;
+            case '?':
+                printf("unknow option: %c", optopt);
+                break;
+            case ':':
+                printf("option require val");
+                break;
+            default:
+                break;
+        }
+    }
+    // 打开文件
+    FILE *fd = fopen(t, "r");
+    // 读取指令
+    char identity;
+    // 读取地址和字节大小
+    unsigned int addr, size;
+    while (fscanf(fd, "%c %x,%d", &identity, &addr, &size) != EOF) {
+        switch (identity)
+        {
+            case 'L':
+            case 'M':
+            case 'S':
+                printf("%c\n", identity);
+                printf("%xu\n", addr);
+                printf("%d\n", size);
+                break;
+            default :
+                break;
+        }   
+    }
+    // 关闭文件
+    fclose(fd);
+    return 0;
+}
+```
+
+#### 冻手!!!
+
+根据 csapp 课程内容，要实现的缓存可以认为是一个 S($2^s$) 行，E 列的二维数组
+
+数组的单位是 block，block 的大小通过参数 b 确定
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/cache_address.png)
+
+对于任意一个地址可以将其按照上图的方式解释，并将其放在 cache 中的某个 block 中
+
+一个 set 内的不同 block 通过 tag 区分，因此这里实现的时候定义 block 具有如下格式：
+
+```c
+typedef struct
+{
+    int valid;
+    int tag;
+    int last_vis;
+} Block;
+```
+
+注意到字段 last_vis 主要是为了记录当前 Block 的访问时间，方便通过 LRU 算法进行 Block 替换
+
+trace 文件中的操作 I 是指令加载，不在本实验的考虑范围内，因此这里主要考虑的指令为 L、S、M
+
+其实本实验根本就不关系导致是从内存中存还是取，而仅仅关注于访问的内存地址，所以 L 和 S 的处理其实都是一样的，通过一次 update 函数更新 cache，进而导致 hit、miss、eviction 的更新；而 M 其实相当于两次 update，所以一次 M 肯定可以产生一次 hit
+
+为了更好的管理 cache 相关的变量，这里定义了结构体 cache
+
+```c
+typedef struct
+{
+    int S;
+    int E;
+    int B;
+    int s;
+    int b;
+    int miss;
+    int hits;
+    int evi;
+    int s_mask;
+} Cache;
+```
+
+>   其中 s_mask 主要是为了获取一个地址的 s 字段
+
+update 函数表示了一次更新操作，可能出现缓存命中，可能出现未命中，而在未命中可能是因为需要 heat cache 还可能需要进行 block eviction 
+
+```c
+/**
+ * @param set_cnt set 的下标
+ * @param tag 一个 set 内用来区分不同 row 的 tag
+ * @param idx 当前 block 的访问时间
+*/
+void update(int set_cnt, int tag, Cache* cache, int idx, Block** blocks) {
+    int j;
+    // 首先遍历 set 内的所有 row 看看没有没 tag 匹配，且 valid 的 block
+    for (j = 0; j < cache->E; j++) {
+        if (blocks[set_cnt][j].valid && blocks[set_cnt][j].tag == tag) {
+            blocks[set_cnt][j].last_vis = idx;
+            cache->hits++;
+            return;
+        }
+    }
+    // 如果没有匹配成功，那么就是一次 miss
+    cache->miss++;
+    
+    // 看看有没有空闲的 block(valid 为 0)
+    for (j = 0; j < cache->E; j++) {
+        if (!blocks[set_cnt][j].valid) {
+            blocks[set_cnt][j].last_vis = idx;
+            blocks[set_cnt][j].tag = tag;
+            blocks[set_cnt][j].valid = 1;
+            return;
+        }
+    }
+    
+    // 如果没有，那么就需要进行内存替换
+    cache->evi++;
+    int min = 0x3f3f3f3f;
+    int min_idx = -1;
+    
+    // 找到所有 block 中访问时间距离现在最远的(last_vis 最小的)
+    for (j = 0; j < cache->E; j++) {
+        if (blocks[set_cnt][j].last_vis < min) {
+            min = blocks[set_cnt][j].last_vis;
+            min_idx = j;
+        }
+    }
+    blocks[set_cnt][min_idx].last_vis = idx;
+    blocks[set_cnt][min_idx].tag = tag;
+}
+```
+
+有了这个 update 函数，整个 main 基本上就是处理输入输出了，很好写
+
+```c
+#include "cachelab.h"
+#include <stdio.h>
+#include <getopt.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdlib.h>
+
+typedef struct
+{
+    int valid;
+    int tag;
+    int last_vis;
+} Block;
+
+typedef struct
+{
+    int S;
+    int E;
+    int B;
+    int s;
+    int b;
+    int miss;
+    int hits;
+    int evi;
+    int s_mask;
+} Cache;
+
+/**
+ * @param set_cnt set 的下标
+ * @param tag 一个 set 内用来区分不同 row 的 tag
+ * @param idx 当前 block 的访问时间
+*/
+void update(int set_cnt, int tag, Cache* cache, int idx, Block** blocks) {
+    int j;
+    for (j = 0; j < cache->E; j++) {
+        if (blocks[set_cnt][j].valid && blocks[set_cnt][j].tag == tag) {
+            blocks[set_cnt][j].last_vis = idx;
+            cache->hits++;
+            return;
+        }
+    }
+    cache->miss++;
+    for (j = 0; j < cache->E; j++) {
+        if (!blocks[set_cnt][j].valid) {
+            blocks[set_cnt][j].last_vis = idx;
+            blocks[set_cnt][j].tag = tag;
+            blocks[set_cnt][j].valid = 1;
+            return;
+        }
+    }
+    cache->evi++;
+    int min = 0x3f3f3f3f;
+    int min_idx = -1;
+    for (j = 0; j < cache->E; j++) {
+        if (blocks[set_cnt][j].last_vis < min) {
+            min = blocks[set_cnt][j].last_vis;
+            min_idx = j;
+        }
+    }
+    blocks[set_cnt][min_idx].last_vis = idx;
+    blocks[set_cnt][min_idx].tag = tag;
+}
+
+int main(int argc, char** argv)
+{
+    // 文件路径
+    char t[100];
+    // 通过 malloc 分配内存
+    Cache* cache = (Cache*)malloc(sizeof (Cache));
+    cache->evi = 0;
+    cache->hits = 0;
+    cache->miss = 0;
+    // 读取 flags
+    int flag;
+    while ((flag = getopt(argc, argv, ":t:s:b:E:")) != -1) {
+        switch (flag)
+        {
+        case 't':
+            // 复制文件路径
+            strcpy(t, optarg);
+            break;
+        case 's':
+            // 字符串转 int
+            cache->s = atoi(optarg);
+            cache->S = 1 << cache->s;
+            break;
+        case 'b':
+            cache->b = atoi(optarg);
+            cache->B = 1 << cache->b;
+            break;
+        case 'E':
+            cache->E = atoi(optarg);
+            break;
+        case ':':
+            printf("opt require a val");
+            break;
+        default:
+            break;
+        }
+    }
+    cache->s_mask = (1 << cache->s) - 1;
+    // 分配空间
+    Block** block = (Block**)malloc(sizeof (Block*) * cache->S);
+    int i;
+    for (i = 0; i < cache->S; i++) {
+        block[i] = (Block*)malloc(sizeof (Block) * cache->E);
+        int j;
+        for (j = 0; j < cache->E; j++) {
+            block[i][j].last_vis = 0;
+            block[i][j].tag = 0;
+            block[i][j].valid = 0;
+        }
+    }
+    // 文件描述符
+    FILE* fd;
+    // // 打开文件
+    fd = fopen(t, "r");
+    char opt;
+    unsigned int addr;
+    int bais;
+    // 读取每一行
+    int idx = 0;
+    while ((fscanf(fd, "%c %x,%d", &opt, &addr, &bais)) != EOF) {
+        if (opt == 'L' || opt == 'S' || opt == 'M') {
+            int set_cnt = (addr >> cache->b) & (cache->s_mask);
+            int tag = addr >> (cache->b + cache->s);
+            update(set_cnt, tag, cache, idx++, block);
+            if (opt == 'M') update(set_cnt, tag, cache, idx++, block);
+        }
+    }
+    // 关闭文件
+    if (fd != NULL) fclose(fd);
+    // 释放空间
+    for (i = 0; i < cache->S; i++) free(block[i]);
+    free(block);
+    free(cache);
+    printSummary(cache->hits, cache->miss, cache->evi);
+    return 0;
+}
+```
+
+最后 make 生成文件，提交一下评测即可
+
+# 链接
+
+gcc 编译大型项目的时候会先后调用语言预处理器(language preprocessor)、编译器(compiler)、汇编器(assembler)、链接器(linker)
+
+gcc 首先通过 cpp (c 预处理器) 将 main.c 翻译成 main.i(ASCII 码)，随后调用 cc1 (c 编译器) 将 main.i 翻译为汇编语言文件 main.s(ASCII 码)，最后 as(汇编器) 翻译 main.s 得到 main.o(可重定位目标文件)
+
+```mermaid
+flowchart TD
+A(main.c)
+B(main.i)
+C(main.s)
+D(main.o)
+A -->|cpp 预处理| B -->|cc1 汇编| C -->|as 编译|D
+```
+
+得到大量的 .o 文件后经过 linker 统一处理后得到可执行目标文件
+
+## 一个例子
+
+```c
+// main.c
+int sum(int*arr, int n);
+int arr[2] = {1, 2};
+
+int main() {
+	return sum(arr, 2);
+}
+
+// sum.c
+int sum(int* arr, int n) {
+	int rst = 0;
+    int i;
+	for (i = 0; i < n; i++) rst += arr[i];
+	return rst;
+}
+```
+
+main 函数调用 sum 函数，获取数组的和
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/link_example.png)
+
+.o 文件不会直接运行，ld (链接器) 会将 main.o 和 sum.o 组合生成可执行目标文件 prog
+
+>   在 linux 中可执行文件不是 .exe 决定的，而是通过文件标识符决定的，只要文件标识符中有 "x" 就可以执行
+
+gcc 编译的时候只需要一行：
+
+```shell
+$ gcc -Og -o prog main.c sum.c
+```
+
+>   -Og 表示执行 debug 级别的优化
+>
+>   -o 后面的表示需要生成的文件，即 prog
+
+可执行文件在运行的时候，shell 会调用 loader 函数，将 prog 的代码和数据直接复制到内存中，随后调整 %rip 即可
+
+## why linkers ?
+
+*   Modularity: 上面的示例中将 main 和 sum 单独拆分为两个文件，相当于是模块化编程
+*   efficiency: 
+    *   Time: 修改某些模块的功能不需要对整个文件进行重新编译，编译部分模块即可，最后让 linker 重新 link 就好了
+    *   Space: 在使用标准库函数(比如 stdlib.b)中提供的函数时，linker 最终不会将整个标准库函数的实现 link 到最终文件中，仅仅 link 了需要使用的部分函数。就算在 main 中引入了一堆 .h 文件，但使用的函数较少，最终得到的可执行目标文件不会很大
+
+## what linkers do ?
+
+* Symbol resolution(符号解析)：将符号引用和唯一的符号定义关联
+
+    >   所谓的符号就是定义的全局变量、函数，比如：
+    >
+    >   ```c
+    >   // define symbol swap
+    >   void swap() {
+    >       // function body
+    >   }
+    >   
+    >   // define symbol x
+    >   int x = 10;
+    >   
+    >   // define symbol xp reference to x
+    >   int *xp = &x;
+    >   
+    >   int main() {
+    >       // reference to symbol swap
+    >       swap();
+    >   }
+    >   ```
+    >
+    >   所有的符号在 .o 文件中存储在 symbol table 的地方(这里的 table 就是一个 struct 数组)
+    >
+    >   table 的每一项包含了 symbol 的信息，比如: name, size, location of symbol
+
+    c 中可能存在重名的全局变量，此时 linker 会决策每个 reference 指向的 symbol，但不管如何，一个 reference 只能指向一个 symbol
+
+* Relocation(重定位): 将 symbol defination 与内存位置关联，并修改所有 symbol reference 的指向，使其指向内存中的位置
+
+## Object File
+
+* 可重定位目标文件: .o 文件, 由 as 生成，二进制数据，包含了代码段和数据段，但不能执行，需要 linker 链接, 一个 .c 文件生成一个 .o 文件
+
+* 可执行文件: .out 文件, 由 linker 生成, 包含了代码段和数据段, 直接放在内存里就可以运行的程序
+
+* 共享目标文件: .so 文件, 特殊的可重定位目标文件，会被动态加载进内存并链接
+
+    >   在 windows 下这 DLL(Dynamic Link Libraries) 文件
+
+## ELF file format
+
+>   Executable and Linkable File
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/executable&linkable_file_format.png)
+
+*   ELF header: 包含了，生成这个文件的 os 的字的大小(一般的话一个 word 就是 16 bits), 字节顺序(大端位或者小端位), 文件类型(relocatable, executable, shared), 机器的类型(x86_64, arm...), section header table 在本 ELF 文件中的偏移量，同时包含了 section header table 中的 entry 大小和数量
+
+    >   section header table 的作用是标识 ELF 中每一段的大小和偏移量
+    >
+    >   section header table 中的每个 entry 就对应了 ELF 中的一个 section
+
+*   .text: 代码段, 就是编译好的二进制代码
+
+*   .rodata: read only data, 比如 switch 中的 jump table
+
+    >   .text 和 .rodata 都是只读的
+
+*   .data: 保存了所有已经初始化的全局变量和 static 类型的变量
+
+    >   局部变量放在了栈中
+
+*   .bss: 保存了所有未初始化的全局变量(被初始化为"零值"的也认为时未初始化), 在 object file 中 .bss 并不占用实际的物理空间, 因为除了需要指定初始值的 global 和 static 的 variable, 其他的变量加载进入内存的时候本身就是 "零值"
+
+    >   bss: better save space
+
+*   .symtab: 这里就是符号表, 就是一个结构体数组, 保存了各种函数和 global variable 的信息
+
+*   .ref.text: 表示了在 .text section 中需要 linker relocate 的部分，主要是那些调用了外部函数的指令; 调用本地变量的指令不需要重定位
+
+    >   在可执行目标文件中默认是没有 .ref.text 段的，主要是因为在 executable object file 已经 link 过了，相对引用已经变成绝对引用了，已经可以直接放在内存中运行了
+
+*   .ref.data: 表示了在 .data section 中需要 linker relocate 的部分，主要是那些对外部模块中全局变量的引用；通常是那些初始值为一个地址的全局变量(就是指针)
+
+    >   当然也包含了函数指针
+
+*   .debug: 编译的时候添加 -Og 的时候才会生成这部分；这部分也是一个数组，包含了 local variables, typedefs, global variables
+
+*   .line: 编译的时候添加 -Og 的时候才会生成这部分；本身是一个 map，映射了源码中的行号和 machine code 中的行号
+
+*   .strtab: 本身是一个字符串，以字符串的形式保存了 .symtab, .debug, 和 .section header table 中提到的各个 section 的 header 的名字
+
+## symbol
+
+*   global symbol: 一个模块中定义的可以被其他模块使用的符号, 在 c 中，只要没有使用 static 修饰的 function 和 variable 就是 global symbol
+
+*   external symbol: symbols that reference to global symbols in other modules
+
+    >   在上面的示例中 sum.c 中的函数 sum 是一个 global symbol，而在 main.c 中的 sum 就是一个 external symbol
+
+*   local symbol: 仅在一个 module 中 define, reference 的 symbol, 在 c 中，使用了 static 修饰的 function 和 variable 就是 local symbol
+
+    >   要注意的是 local symbol 不是 local variable, local variable 存储在栈中, linker 并不知道栈中的 local variable
+
+    ```c
+    int f() {
+        // local symbol, 存储在 .data(初始化) 或 .bss(未初始化)
+        static int x = 10;
+        // local variable, 存储在栈中
+        int y = 20;
+    }
+    int g() {
+        static int x = 0;
+    }
+    ```
+
+    注意到在 f 和 g 中都定义了 local symbol, 在 symbol table 中好像会出现重名的现象，不过此时这里变量将被重命名, 比如 f 中的 x 被重命名为 x.1, 而 g 中的 x 被重命名为 x.2
+
+>   这么说起来, c 里面的 static 有点 private 的意思了
+
+.symtab 段本身是一个数组，数组的每一项是一个 entry
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/symbol_table_entry.png)
+
+解释一下每个字段：
+
+*   name: 本身是一个字节的偏移量，偏移是相对于 .strtab 字段而言的，即 name 表示了 .symtab 中当前 entry 在 .strtab 中的偏移量
+*   value: 符号的地址，如果是在可重定位目标文件中，那么该地址为在该符号在对应 section 中的偏移量；而如果在可执行目标文件中那么这个地址将是一个绝对地址(内存中的某个地址)
+*   size: object size, 当前符号的大小
+*   type：区分是当前符号是 data 还是 function，尽管使用 char 类型保存，但实际使用了 4 bit 进行区分
+*   binding: 区分当前符号是 global 还是 local 的
+*   section: 表示当前符号所在的 section，本身是 section header table 的一个索引
+
+在 section header table 中除了之前提到的 .data, .bss, .text 还有三个 pseudosection(伪节):
+
+*   ABS: 保存了不应该被重定位的 symbol
+*   UNDEF: 未定义的符号，当前 symbol 是对其他 module 的某个符号的 reference
+*   COMMON: 为初始化的符号
+
+在 gcc 中通过以下规则区分 .bss 和 COMMON：
+
+*   COMMON: 未初始化的 global symbol
+*   .bss: 为初始化的 local symbol 和所有初始化为"零值"的 global symbol 和 local symbol
+
+原书中给出了一个 .symtab 的例子，比较形象
+
+## 符号解析
+
+因为 extern symbol 是定义在其他 module 中的，如果出现了同名的符号，那么 linker 必须决策如何将 reference 映射到合理的 symbol 上
+
+>   c 中尽量不要出现同名的 symbol，而在 c++ 和 java 中是支持重载的(方法层面上)
+>
+>   对于重载方法而言，编译器会将方法名和方法的参数列表组合得到一个 name，这样就算方法名相同，只要参数列表不同，那么编码后得到的 name 也是不同的
+>
+>   编译器编码方法名的过程称为 mangling，而解码的过程称为 demangling
+>
+>   c++ 中类名会被编码为类名的字符数量 + 原类名，比如 Foo 会被编码为 3Foo
+>
+>   编码方法时，会在方法名后面添加 "__",后面添加类名，和参数的单字母编码
+>
+>   比如 Foo::bar(int, long) 会编码为 bar__3Fooil
+>
+>   编码全局变量名的策略和编码方法是类似的
+>
+>   这也就是为什么方法重载时，方法返回值不同是不能编译通过的(因为编码的时候根本就不包括返回值)
+
+因为一个 reference 只能指向一个 symbol, 所以如果出现了多个同名的 symbol, linker 会将不同的 symbol 区分为 strong 和 weak 类型
+
+*   strong: 函数名或者初始化的全局变量就是 strong 类型的
+*   weak: 未初始化的全局变量是 weak 类型的
+
+```c
+// x 是 strong 类型的
+int x = 10;
+// y 是 weak 类型的
+int y;
+// foo 是 strong 类型的
+int foo() {
+    // function body
+}
+```
+
+链接规则：
+
+* 不允许 strong symbol 重名，否则 link 阶段直接报错 -> 不允许重名方法
+* strong symbol 和 weak symbol 重名时，选择 strong symbol
+
+* 多个 weak symbol 重名，就随便选一个 -> 存在隐患
+
+    ```c
+    // foo1.c
+    int x;
+    
+    // foo2.c
+    char x;
+    ```
+
+    在 link 阶段对 x 的引用会变成 foo1.c 和 foo2.c 中随便选取一个, 那么使用的时候 x 的类型是不确定的, 可能编译的时候不会出现什么问题, 但如果实际运行起来, 那么可能因为类型错误报 segment fault
+
+为了避免出现全局变量重名的问题，应该：
+
+*   尽可能避免使用 global variable，如果需要使用，尽量使用 static 修饰
+*   使用 global variable 最好对其进行初始化，这样在 link 阶段可以发现是否存在重名的全局变量
+*   如果需要使用一个外部的全局变量，最好给变量加上 extern 修饰 
+
+## 重定位
+
+在符号解析阶段，linker 已经将所有的符号引用和符号定义关联起来了(将符号引用和 .o 文件的 .symtab 中的一个 entry 对应起来)
+
+>   符号解析后目标文件中的 .text 和 .data 的大小就已经是确定的了
+
+linker 需要整合不同的可重定位目标文件得到一个可执行目标文件，更为具体的重定位分为两个步骤：
+
+*   relocating sections and symbol definitions: linker 会将各个文件的相同的 section 合并到一起，放在可执行目标文件的对应 section 中，并且 linker 会给部分 section 赋予内存地址，比如 .text 和 .data(包含了各种 symbol)；linker 完成这个操作后，每个 symbol 和指令都具有了一个内存地址 -> 可以直接放在内存中运行了
+*   relocating symbol references within sections: 修改 .text 和 .data 中对于每个符号的 reference，使其指向正确的内存地址
+
+### relocation entry
+
+linker 将 refercence to symbol 指向正确的内存地址依靠的就是 relocation entry，这些 entry 放在了 .rel.text 和 .rel.data 中
+
+汇编器遇到了一个未知的符号，就会生成一个 relocation entry，并放入 .rel.text 和 .rel.data 中，用来告诉 linker，这些符号在 link 阶段需要指向正确的内存地址
+
+在 ELF 中 entry 具有如下格式：
+
+```c
+typedef struct {
+    long offset;
+    long type:32，
+         symbol:32;
+    long addend;
+} Elf64_Rela;
+```
+
+分别解释一下上面的几个字段：
+
+*   offset: 对应了 reference 在原来 section 中的偏移量
+*   type: relocation type, 在 ELF 中定义了 32 种不同的重定位类型
+*   symbol: refernce 指向的 symbol 在 .symtab 中的偏移量
+*   addend: 符号常数，有的时候 linker 会用到
+
+在 32 中 relocation 中最常见的两种：
+
+*   R_X86_64_PC32: 重定位一个使用 32 位 PC 相对地址的引用
+
+    >   说白了就是：最终的地址 = 该指令地址的操作数 + PC 的值 
+    >
+    >   当 CPU 执行到一个 PC 相对寻址的指令时，会将指令中编码的 32 位值加上 PC 值得到结果地址
+    >
+    >   这个结果地址可能是一个方法地址，比如 call 指令一般上都是通过相对地址寻址的
+
+*   R_X86_64_32: 重定位一个使用 32 位 PC 绝对地址的引用
+
+### relocation algorithm
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/relocation_algorithm.png)
+
+csapp 给出了一个重定位的算法，基本的轮廓是个两层遍历，遍历每个 section 的每个 entry
+
+对于根据 entry 的 offset 对应符号的地址(refptr)，重定位就是将 refptr 的值修改为运行时的内存地址
+
+注意如果是相对地址引用，那么真实地址和当前符号在 section 的中的地址进行做做差编码
+
+>   符号的真实地址为 ADDR(r.symbol) + r.addend
+
+### 举例说明
+
+在最前面的[例子](#一个例子)中，将 main.o 通过 objdump 得到反汇编代码：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/relocation_entry_in_code.png)
+
+因为 main.c 中定义了两个符号 arr 和 sum，因此 complier 生成了两个 relocation entry，这两个 entry 放在了引用的下一行，这两个 entry 是 complier 留给 linker 在 link 阶段使用的，这也就意味着在最终的可执行目标文件中不会有这两个 entry
+
+>   前面也提到了 relocation entry 放在了 .ref.text 和 .ref.data 中，并在 .text 和 .data 中，objdump 只不过为了方便查看，将 relocation entry 和源码放在了一起
+
+看到 main 首先移动栈指针 %rsp, 准备进行方法调用，随后将参数 2 放入 %esi(第二个参数)，将 0x0 放入 %edi(第一个参数)
+
+#### 第一个符号
+
+由于数组真实地址未知，所以编译器将全 0 存入 %edi 中，并标记此处需要重定位，并且 complier 告诉 linker 这个参数大小是一个 32 位的
+
+在 main 的反编译代码中地址为 0x9 位置的操作码为 0xbf，翻译过来就是 mov 指令，后面紧跟的地址: 0xa, 0xb, 0xc, 0xd，的操作数都是 0，这 4 个字节，表明了将一个 32 位的地址 0x00000000 放入了 %edi 中
+
+relocation entry 4 个字段的属性：
+
+*   offset: 0xa
+*   symbol: arr
+*   type: R_X86_64_32
+*   addend: 0
+
+现在假设在 relocate symbol defination 时为符号 arr 分配了实际地址 0x601018，假设符号 main 分配了地址 0x4004d0
+
+那么 linker 首先计算出需要修改的操作数的地址为 0x4004d0 + 0xa, linker 会从这个位置开始修改 32 位的操作数，将 0xa, 0xb, 0xc, 0xd 处的操作数赋值为 0x18, 0x10, 0x60, 0x00
+
+>   小端法
+
+即现在编译后的代码为：
+
+```assembly
+9:	bf 18 10 60 00	mov $0x601018, %edi # &arr -> edi
+```
+
+#### 第二个符号
+
+在 main 的反编译代码中 0xe 位置的操作码位 0xe8, 翻译过来就是 call 指令，后面紧跟的地址 0xf, 0x10, 0x11, 0x12 处的操作数都是 0，这 4 个字节，表明了将一个 32 位的值 0x00000000 作为函数调用地址；理由也是同样的，complier 并不知道 sum 函数的实际地址，因此调用地址为全 0
+
+relocation entry 4 个字段的属性：
+
+*   offset: 0xf
+*   symbol: sum
+*   type: R_X86_64_PC32
+*   addend: -4
+
+现在假设 relocate symbol defination 的时候为符号 main(.text 段的开头) 分配了实际地址 0x4004d0, 为符号 sum 分配了实际地址 0x400e8
+
+那么 linker 首先计算出计算得到需要修改操作数的地址为 0x4004d0 + 0xf = 0x4004df，linker 会在 0x4004df 修改一个 32 位的操作数，和上面的不太一样的是，因为是相对地址寻址，所以需要的操作数好需要进行计算, 操作数为 0x400e8 - 4 - 0x4004df = 0x5, 因此 0xf 处保存的为 0x05，0x10, 0x11, 0x12 保存的均为 0x00
+
+编译后的指令为:
+
+```assembly
+4004de:	e8 05 00 00 00	callq 4004e8<sum>
+```
+
+当运行到 call 指令时，PC 此时的取值为 0x4004e3, 偏移量为 0x5, 所以 PC 将要跳转到 0x4004e3 + 0x5 = 0x4004e8
+
+>   是的 call 指令对应的 PC 值取得并不是 0x4004de, 而是 0x4004e3 -> 下一条指令的地址
+>
+>   也正是因为这种跳转机制，才使得上面计算实际操作数时，需要使用 addend 进行修正(-4)
+
+如果完整的看一下编译的结果
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/link_example_obj_file.png)
+
+## 可执行目标文件
+
+### ELF 可执行目标文件格式
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/executable_obj_file_format.png)
+
+基本格式和 ELF 可重定位目标文件差不多，只不过因为 symbol 的地址已经分配好了，这里不再需要 .ref.data 和 .ref.text 了，而 .text, .rodata, .data 段和可重定位目标文件都是差不多的，只不过这里的引用指向的都是 symbol 的实际地址
+
+此外，为了让该文件加载到内存中可以直接运行，在 ELF header 中还包括了程序的入口(entry point)，注意到 ELF 中有一段 .init，这段可以认为是特殊的 .text，在 .init 中定义了一个函数 _init 这是一个初始化函数，在 main 函数之前会调用这个函数
+
+ELF 文件的特殊格式，使得文件很容易被映射到实际的内存中(ELF 文件中连续的一段就可以映射到一段连续的内存中)，在 ELF 文件中的 program header table 提供了这种映射关系，csapp 中给出了一个[最开始例子程序](#一个例子)中的 prog 的 program header table
+
+>   program header table 就是 ELF 中的 Segment header table
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/program_header_table_example.png)
+
+可以看到这里以两个内存段, 要注意 read-only code segment 不仅仅包含了 .text，还包括了 ELF header, .init, program header table, .rodata, 而 data segment 主要就是 .data
+
+read-only code segment 在可执行目标文件中的地址偏移为 0x0，而当被加载到内存中后，会被映射到 0x400000, 根据 flag 可以看到这段是可读可执行的，但不可写，而对比 .data 是可写的
+
+注意到 .data 在 ELF 文件中的大小为 0x228，而在内存中确实 0x230，这是因为 ELF 文件中包含了 .bss 段，这部分的 symbol 是未初始化的，因此 ELF 文件中并没有分配内存，但在实际加载到内存中时，需要为其分配空间
+
+>   从 0x228 到 0x230 一共 8 个字节用来分配给未初始化的 symbol
+
+linker 并不是随意分配地址的，文件中 segment 的偏移地址和内存的起始地址需要满足条件：off mod align = vaddr mod align
+
+特别的因为这里的 align 为 $2^{21}$, 即 0x200000 <a id="segment_alignment_rule"></a>
+
+*   read-only code: off mod align = 0; vaddr mod align = 0
+*   read/write data: off mod align = 0xdf8; vaddr mod align = 0x600df8 mod 0x200000 = 0xdf8
+
+这种 align 的对其原则的好处，在虚拟内存中可以体现出来
+
+### 加载可执行目标文件到内存
+
+在 shell 中使用命令:
+
+```shell
+$ ./prog
+```
+
+操作系统会调用 loader(一个加载器)，运行程序
+
+>   通过 execve 系统调用，可以调用 loader，从而执行各种程序
+
+loader 会将 ELF 文件中的代码和数据加载到内存中，并跳转到程序的 entry point
+
+内存中的程序具有如下的格式
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/linux_program_memory.png)
+
+其中 read-only 的部分为: .init, .text(代码段), .rodata(只读数据段), 在内存中被加载到了 read-only code segment 中
+
+保存全局变量的 .data 和 .bss 会被加载进入内存的 read/write segment(注意到不是栈!)
+
+在 linux 中，程序都加载到 0x400000(算是一种习惯吧), read-only code segment 后面紧挨着 read/write segment; 再往后就是堆，调用 malloc 函数可以在堆中分配内存，堆顶通过全局变量 brk 指示，堆会从小地址向大地址增长，堆后面的区域为 share libraries 预留(这个后面会说)
+
+用户栈起始地址为 $2^{48} - 1$(0x0000ffffffffffffffff), 栈会从大地地址向小地址增长，栈顶由寄存器 %rsp 指示
+
+用户栈的上面是为操作系统内核保留的，起始地址为 $2^{48}$(0x00010000000000000000)，内核常驻在内存中，使用的就是这里的地址
+
+尽管在图中 read-only code segment 和 read/write segment 是相连的，但根据前一节<a href="#segment_alignment_rule">对其规则</a>，可知对其的取模规则限制了，这两个部分之间可能是存在空洞的;此外出于安全性的考虑，栈、堆、共享库的位置每次程序运行的时候都是随机的 -> ASLR；因此实际的程序内存空间，并不是上图中看起来的那么"规则"
+
+尽管用户编译程序的入口是 main 函数，但编译时 linker 会将 ctrl.o(一个系统级别的 .o 文件) link 到可执行目标文件中，在 crtl.o 中，定义了函数 _start, 这个函数才是所有程序的 entry point。\_start 会调用 **system startup function**: _libc_start_main(定义在 libc.so 中)，随后进行一些初始化操作，比如传递参数 argc, argv，之后才会调用用户编写的 main 函数，而当 main 函数返回时，这个函数也会处理 main 的返回值
+
+## pack API
+
+c 提供了若干个标准库函数, 显然不能将所有的库函数都放在一个文件中, 而如果将库函数进行差分的太细致, 那么又会产生大量的 .o 文件, 每次使用 gcc 编译时, 可能需要写一长串的 .o 文件
+
+显然大量的 .o 文件需要进行管理
+
+### 静态库
+
+将所有需要的.o文件打包起来，称为一个独立的文件，并将其作为链接器的输入, 通过文件内的偏移量使用这些可重定位文件
+
+c 语言默认提供了大量的库函数，比如在 libc.a 中提供了有关常见字符串操作(atoi)和输入输出(scanf, printf)相关的函数，在 libm.a 中提供了大量和数学操作相关的函数(sin, cos...)
+
+在 .a 文件出现之前，如果希望使用库函数，那么需要让程序链接大量的 .o 文件，一个 gcc 编译的命令会写的很长，很容易写错，且不容易排查
+
+尽管 makefile 可以解决这个问题，但在创建 makefile 的时候，还是需要小心翼翼的把 gcc 命令写对
+
+有了 .a 文件，那么此时编译的时候只需要添加一个 libc.a(或者 libm.a) 即可，再也不需要写一堆的 .o 文件了
+
+```shell
+# csapp 的举例
+$ gcc -o prog main.c /usr/lib/libc.a
+```
+
+>   注意这里的 .a 文件可以认为是一堆 .o 的集合
+>
+>   如果不使用 .a 而是将所有的 .o 文件变为 libc.o 那么会导致链接后的可执行文件太大了，并且当需要修改某些函数升级的时候，却需要编译整个文件
+>
+>   因此多个模块肯定是需要放在不同的 .o 文件中的
+
+借助了 .a 文件，linker 可以从所有的 .o 文件中选择当前 main.c 需要的进行 linking，这样不仅方便了源码管理，同时在用户使用的时候也是很方便的
+
+>   事实上，在编译的时候 gcc 总是会把 libc.a 作为 link 的参数，根本不需要手动添加这个参数
+
+举个例子, 假设存在一个静态库中含有两个写好的函数, 一个用来做向量加法，一个用来做向量内积：
+
+```c
+// addvec.c
+
+int addcnt = 0;
+
+void addvec(int* x, int* y, int* z, int n) {
+    int i;
+    for (i = 0; i < n; i++) z[i] = x[i] + y[i];
+    addcnt++;
+}
+
+
+// multvec.c
+int multcnt = 0;
+
+void multvec(int* x, int* y, int* z; int n) {
+    int i;
+    for (i = 0; i < n; i++) z[i] = x[i] * y[i];
+    multcnt++;
+}
+```
+
+现在 main 调用加法函数，那么其链接过程如下: 
+
+linux 提供了 AR 工具，用来打包生成一个 .a 文件
+
+```shell
+$ gcc -c addvec.c multvec.c
+$ ar rcs libvector.a addvec.o multvec.o
+```
+
+随后编写 main 程序
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/static_link_example.png)
+
+注意编译的时候需要考虑顺序问题，参数必须按照下面的顺序，具体原因后面会解释
+
+```shell
+$ gcc -o prog2c main.c libvector.a
+```
+
+>   因为 c 官方的写法都是 libxxx.a，所以 gcc 编译的时候可以简写为
+>   ```shell
+>   gcc -o prog2c main.c -L. -lvector
+>   ```
+>
+>   其中"-L."表示在当前目录下查找 libvector.a
+
+链接器仅将静态库中 addvec.o 链接进入程序中，而忽略 multvec.o
+
+>   此外还会将 printf.o 链接到程序内部
+
+### link 的过程
+
+对于上面的程序，如果修改编译的顺序写成
+
+```shell
+$ gcc -o prog2c libvector.a main.c
+/tmp/ccc7bzQ0.o: In function `main':
+main.c:(.text+0x59): undefined reference to `addvec'
+collect2: error: ld returned 1 exit status
+```
+
+可以看到直接就报错了，似乎编译的时候还需要考虑顺序问题
+
+linker 在 link 阶段，会从 command line 上从左向右扫描所有的 .o 和 .a 文件
+
+>   如果是 .c 文件，那么会将其编译得到 .o 文件
+
+扫描的过程中 linker 会存储所有未能解析的符号引用, 遇到新的 .o 或 .a 文件时, linker 会尝试从这些文件中解析那些未定义的符号引用
+
+扫描完所有的 .o 或 .a 文件后，如果 linker 中还保存了未能解析的符号引用, 那么将报错 
+
+特别的, linker 维护了以下几个集合:
+
+*   U: 未解析的符号的集合
+*   E: 可重定位文件的集合
+
+*   D: 文件中已经定义的符号的集合
+
+对于每一个文件，linker 会查看其文件类型: 
+
+*   如果是一个目标文件(.o 文件)，那么会将其加入 E 中，并根据文件内容修改集合 U、D
+
+*   如果是一个文档文件(.a 文件)，那么会匹配 U 中的元素和文件成员定义的符号，如果文件中存在符号解析 U 中的引用，就将其加入 E 中
+
+扫描结束，如果 U 非空，会报错
+
+这种从左到右的扫描方式, 其实暗含了文件之间的顺序, 这也就是上面报错的原因：在因为首先扫描到了 libvector.a 因为 U 为空，因此直接跳过；而当扫描到 main.o 的时候发现出现了未定义的符号 addvec
+
+所以使用静态库的时，习惯上将 .a 参数放在命令的结尾；但如果静态库之间本身就存在依赖关系，那么此时每个静态库之间也需要进行排序
+
+综上静态库使用的时候时比较麻烦的，简单的命令顺序的替换就能导致报错，所以现在其实用的更多的是动态库
+
+### 动态库(share library)
+
+静态库的缺点：
+
+*   命令顺序导致的编译错误问题
+
+*   在 link 阶段, 静态库将常用的库函数 link 到可执行目标文件中, 这也许意味着一个操作系统上的不同程序可能需要 link 相同的库函数; 那些常用的库函数比如 scanf, printf 基本上所有的程序都需要 link 一下, 这会导致最终的可执行目标文件有点臃肿了, 不同的文件之间存在重复(都 link 了相同的库函数)
+
+    >   同一段代码会进入多个程序的代码段
+
+静态库在 link 阶段被 link 得到一个可执行目标文件, share library 会在程序实际在内存中运行时才进行 link, 甚至可能在程序运行的时候才进行 link，这个过程被称为动态链接(dynamic linking)，这个过程是通过动态链接器(dynamic linker)执行的
+
+传统的静态库使用的目标文件以 .o 结尾，为了区分，动态库，也就是共享库使用的目标文件以 .so 结尾(share object)
+
+>   在 windows 中使用的后缀为 .dll
+
+所谓共享(share)具有两方面的含义：
+
+*   所有对于某个库函数的引用，其实都是对于某一个 .so 文件的引用，.so 文件中的 .text 和 .data 是被所有其他文件共享的
+
+    >   和静态库不同，使用静态库，不过是从一个统一的 .o 文件中复制 .text 和 .data 到自己的可执行目标文件中，每个程序之间 .text 和 .data 并不是共享的 
+
+*   一个 share library 的 .text 可以被不同的进程共享
+
+对于上面静态库对应的例子，可以如果将其优化为动态库, 那么对应的链接流程如下: <a id="share_library_example"></a>
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/share_library_example.png)
+
+可以通过下面的命令生成动态库函数
+
+```shell
+$ gcc -shared -fpic -o libvector.so addvec.c multvec.c
+```
+
+其中 -shared 指示 gcc 生成一个 .so 文件，-fpic 告诉 gcc 生成一个位置无关的代码
+
+随后编译的命令变为
+
+```shell
+$ gcc -o prog2c -Og main.c ./libvector.so 
+```
+
+创建可执行目标文件 prog2c 时，会在 prog2c 内部执行一些静态链接，使得 pro2c 和 libvector.so 产生关联，随后只有当 prog2c 真正被 load 进入内存中时，才会完成 linking 的过程，所以在 prog2c 中并没有 libvec.so 中的代码和数据
+
+在 load 阶段 loader 会发现 prog2c 中有一个 .interp 的 section，它包含了 dynamic linker 的路径信息
+
+这个 dynamic linker 本身就是一个 share object，特别的在 linux 中为 ld-linux.so
+
+此后 loader 不会直接跳转到 entry point，而是将控制交给 dynamic linker，dynamic lingker 需要对 prog2c 中的符号进行重定位，完成 linking，具体的包括了：
+
+*   重定位 libc.so 的 .text 和 .data 到内存中的某个区域
+*   重定位 libvector.so 的 .text 和 .data 到内存中的某个区域
+*   重定位 prog2c 中对于 libc.so 和 libvector.so 的引用
+
+### 在程序中加载 share library
+
+linux 提供了一些接口，用于在程序运行时动态 load&link share library
+
+>   这部分不管是中文版的 csapp 还是英文版的 csapp，都每太看懂
+>
+>   这里直接看了 [dlopen(3) - Linux manual page (man7.org)](https://man7.org/linux/man-pages/man3/dlopen.3.html#top_of_page)
+
+```c
+#include <dlfcn.h>
+// 获取指向了对应 share library 的指针(后面称为 handle)，如果出错会返回 NULL
+void *dlopen(const char* filename, int flag);
+
+// 从某个 share library(handle)获取对应 symbol 的 reference，如果出错会返回 NULL
+void *dlsym(void *handle, char *symbol);
+
+// 卸载某个 handle(share library), 如果卸载成功返回 0，否则返回 -1
+int dlclose(void *handle);
+```
+
+dlopen 的第一个参数为 share library 的路径，第二个参数 flag 表示当前加载的 share library 如何进行 symbol resolve
+
+对于相互依赖的问题：If the object specified by filename has dependencies on other shared objects, then these are also automatically loaded by the dynamic linker using the same rules.  (This process may occur recursively, if those objects in turn have dependencies, and so on.)
+
+>   如果当前的 share library 依赖了其他的 share library，那么 dynamic linker 会自动将其依赖的 library 加载到内存中，使用的规则和 当前函数的 flag 一致(这个规程会递归的进行下去)
+
+flag 必须是下面的两个取值之一：
+
+*   RTLD_LAZY: 懒加载 -> Resolve symbols only as the code that references them is executed. 只有函数引用才会被遵从这个规则，如果是对变量的引用，还是会在 load share library 的时候就进行解析
+*   RTLD_NOW: 直接加载，在 dlopen 返回之前，直接完成 reference relocation
+
+这个 flag 本身可以是一堆常量的或运算，但是必须包含上面两个变量中的一个
+
+>   flag 和 RTLD_GLOBAL 进行或运算，表示从当前 share library 中定义的 symbol 可以被其他的 share library 用来进行符号解析
+
+进行符号解析的时候难免出现问题
+
+```c
+#include <dlfcn.h>
+// 如果之前的 dlopen, dlsym, dlclose 报错了，那么调用 dlerror 会返回对应的错误信息，如果前面的调用没出错，返回 NULL
+const char *dlerror(void);
+```
+
+下面给出之前<a href="#share_library_example">动态加载向量运算的共享库</a>的，现在不是在 dynamic loader 在 load 阶段进行 linking，现在需要在程序运行时重定位引用
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <dlfcn.h>
+
+int x[2] = {1, 2};
+int y[2] = {3, 4};
+int z[2] = {0, 0};
+
+int main() {
+	void *handle;
+	void (*add_vec)(int *, int *, int *, int);
+	char *error;
+	
+    // RTLD_LAZY 表示只有方法 add_vec 在执行之前，才会被 relocation 到正确的地址
+	handle = dlopen("./libvec.so", RTLD_LAZY);
+	// 等价于 handle == NULL
+	if (!handle) {
+		fprintf(stderr, "%s\n", dlerror());
+		// 出错了直接终止程序，一个好习惯
+		exit(10);
+	}
+
+	add_vec = dlsym(handle, "add_vec");
+	if ((error = dlerror()) != NULL) {
+		fprintf(stderr, "%s\n", error);
+		exit(20);
+	}
+
+	add_vec(x, y, z, 2);
+	printf("z is [%d : %d]\n", z[0], z[1]);	// z is [4, 6]
+
+	if (dlclose(handle) < 0) {
+		fprintf(stderr, "%s\n", dlerror());
+		exit(30);
+	}
+
+	return 0;
+}
+```
+
+>   关于 stderror: [stderr(3): standard I/O streams - Linux man page (die.net)](https://linux.die.net/man/3/stderr)
+>
+>   简单来说就是 unix 程序的三条基本流之一的 error 流，尽管在 terminal 中可以看到打印输出，但要注意的是，这里打印的结果来自 stderror 而不是 stdout
+>
+>   关于 fprintf，可以认为这是一个高级的 printf 方法，这是一个高级的打印方法，可以将输出导出到某个输出流中，当然也包括了文件流，这里利用 fprintf 将输出导出到 error 流中了
+
+编译 main 函数
+
+```shell
+$ gcc -o prog2c -Og main.c -ldl
+```
+
+>   其中 ldl 表示需要 link libdl 中的可重定位目标文件，主要是针对方法 dlopen, dlsym, dlclose
+>
+>   之前编译的时候不需要额外的参数，主要是 main 函数中主要都是 libc 中的函数，而 libc 默认就已经是 gcc 的编译参数了
+
+### JNI
+
+没错就是 java native interface，即通过 java 调用 c 或 c++ 程序
+
+java 程序运行在 jvm 中，当 jvm 需要调用 c 程序中，其实就是依赖 dynamic linking
+
+那些写好的 c(或 c++) 函数放在了 .so 文件中，jvm 会通过 dlopen 接口将 share library 动态加载进入内存，并进行 reference relocation，最后动态的调用方法
+
+### Position-Independent Code
+
+>   位置无关的代码
+
+share library 可以保证所有进程共享相同的 library，同时为了保证灵活性，不同进程加载相同的 library 的时候可能加载到不同的位置
+
+比如上面使用 gcc 生成 PIC 的 share library 的时候添加了参数 -fpic
+
+
+
+## library interpositioning(库打桩)
+
+截获对于共享库函数的调用，而执行自定义的代码，有点类似 AOP
+
+interposition 可以记录对某个库函数的调用次数，验证追踪函数的输入输出，甚至可以替换其函数实现
+
+基本的想法是对于目标函数，创建一个包装函数，尽管二者的名称可能并不相同，但通过某种特殊的打桩机制，使得程序运行时调用的是包装函数，而不是直接调用目标函数，这样当用户调用目标函数时，其实调用的是新定义的包装函数
+
+interposition 可以发生在：compile time, link time, load time, execute time
+
+csapp 中对打桩机制的介绍，针对的目标函数 libc 中的 malloc 和 free 函数，每次使用 malloc 分配一个 32 个字节大小的空间，并将其释放
+
+```c
+// test.c
+#include <malloc.h>
+
+int main() {
+	int *p = malloc(32);
+	free(p);
+	return 0;
+}
+```
+
+### compile time interposition
+
+为了实现在编译时打桩，这里自定义了重名同文件 malloc.h，同时创建了包装函数 my_malloc 和 my_free
+
+```c
+// malloc.h
+#define malloc(size) my_malloc(size)
+#define free(ptr) my_free(ptr)
+
+void* my_malloc(int size);
+
+void my_free(void* ptr);
+
+// my_malloc.c
+#ifdef COMPILETIME
+#include <stdio.h>
+#include <malloc.h>
+
+void* my_malloc(int t) {
+    void* ptr = malloc(t);
+    printf("interposition malloc, allocate size: %d, pointer is %p\n", t, ptr);
+    return ptr;
+}
+
+void my_free(void* ptr) {
+    printf("interposition free, pointer is %p\n", ptr);
+    free(ptr);
+}
+#endif
+```
+
+在同名头文件 malloc.h 中定义了两个宏，将 malloc 和 free 替换为自定义的函数 my_malloc 和 my_free
+
+在 my_malloc.c 中实现了 my_malloc 和 my_free, 可以看到这里的实现就是在 malloc 之后 free 之前添加了两条打印输出语句
+
+注意到整个 my_malloc.c 被定义在 #ifdef 中，表示了只有在编译的时候存在宏定义 COMPILETIME 时才会编译后面的两个函数，这里这样做主要是为了和后面进行区分
+
+编写好程序后首先编译 my_malloc.c
+
+```shell
+$ gcc -c -DCOMPILETIME -Og my_malloc.c
+```
+
+注意在编译 test.c 的时候需要添加参数 -I. 相当于告诉预编译器，从当前目录中查找头文件
+
+>   注意这里不需要写成 #include "malloc.h"
+
+```shell
+$ gcc -o test_compile_time -Og -I. test.c my_malloc.o
+```
+
+运行一次得到：
+
+```shell
+$ ./test_compile_time
+interposition malloc, allocate size: 32, pointer is 0x55c3afb69260
+interposition free, pointer is 0x55c3afb69260
+```
+
+注意到在编译时实现 interposition 主要利用了 -I. 参数，在让预编译器在预处理阶段根据重名头文件 malloc.h 中宏定义替换 malloc 和 free 函数
+
+然后在 linking 阶段手动 link 新的 malloc 和 free 的实现即可
+
+因为 my_malloc.c 本质上还是需要 malloc 和 free 进行内存获取或释放的，因此编译 my_malloc.c 的时候不能添加参数 -I.
+
+### link time interposition
+
+链接器打桩的关键在于 gcc 支持参数 --wrap f, 这个参数相当于告诉编译器，把所有符号 f 翻译为 __wrap_f, 并把所有符号 \_\_real_f 翻译为 f
+
+```c
+// my_malloc.c
+#ifdef LINKTIME
+void* __real_malloc(int t);
+void __real_free(void* ptr);
+
+void* __wrap_malloc(int t) {
+    void* ptr = __real_malloc(t);
+    printf("interposition malloc, allocate size: %d, pointer is %p\n", t, ptr);
+    return ptr;
+}
+
+void __wrap_free(void* ptr) {
+    printf("interposition free, pointer is %p\n", ptr);
+    __real_free(ptr);
+}
+#endif
+```
+
+注意到现在仅需要在修改 my_malloc.c 即可，完全不需要头文件替代这种操作了
+
+编译时，操作还是一样的
+
+```shell
+$ gcc -c -DLINKTIME -Og my_malloc.c
+$ gcc -c -Og test.c
+```
+
+但是在 link 阶段，需要告诉 linker，需要 wrap 符号 malloc 和 free
+
+为了向 linker 传递参数，需要使用参数 "-Wl,option", 其中 option 为向 linker 传递的参数，option 之间通过 "," 分割，而不是空格
+
+>   个人猜测，"-Wl" 表示向 linker 传递参数，其参数为 "-Wl" 后面的字符串，而一旦出现了空格，那么 gcc 就会认为 "-Wl" 结束了
+>
+>   所以这里分割传递给 linker 的参数时使用的是 "," 而不是 " "
+
+```shell
+gcc -o test_link_time -Wl,--wrap,malloc,--wrap,free test.o my_malloc.o
+```
+
+>   -Wl,--wrap,malloc,--wrap,free 表示向 linker 传递参数 "--wrap malloc --wrap free"
+
+### run time interposition
+
+编译时打桩需要能够接触到程序的源代码, 链接时打桩需要能够接触到程序的可重定位目标文件, 而运行时打桩只需要能接触到可执行目标文件!
+
+关键点在于动态链接器的 LD-PRELOAD 环境变量，LD-PRELOAD 表示的是共享库的路径列表，在加载(或者运行时)如果(ld-linux.so)解析到未定义的引用时会在 LD-PRELOAD 中定义的 share object 中搜索，然后才会搜索其他库
+
+基于这种机制，只要写好了 LD-PRELOAD 那么理论上，可以对任意的库函数实现 interposition
+
+>   这里在 csapp 原书中的例子并不是很好，针对 malloc 的 "切面" 中包含了 printf 语句，而 printf 语句本身也需要调用 malloc 函数，这就导致了在  malloc 和 printf 的循环调用，程序直接报 segmentation fault
+>
+>   因此这里实际参考了 [Using Interposition (Linker and Libraries Guide) (oracle.com)](https://docs.oracle.com/cd/E19683-01/816-1386/chapter3-26/index.html) 中的写法
+
+```c
+#ifdef RUNTIME
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <sys/types.h>
+#include <dlfcn.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <string.h>
+void print_error(char* msg) {
+    write(2, msg, strlen(msg));
+    exit(1);
+}
+void *malloc(size_t size) {
+    void *(* malloc_ptr)(size_t);
+    char buffer[50];
+    char* error;
+
+    malloc_ptr = (void *(*)(size_t))dlsym(RTLD_NEXT, "malloc");
+    if ((error = dlerror()) != NULL) print_error(error);
+    void* ptr = malloc_ptr(size);
+    sprintf(buffer, "malloc: %ld bytes, address: %p\n", size, ptr);
+    write(1, buffer, strlen(buffer));
+    return ptr;
+}
+
+void free(void* ptr) {
+    void(* free_ptr)(void *) = 0;
+    char buffer[50];
+    char* error;
+    free_ptr = (void(*)(void *))dlsym(RTLD_NEXT, "free");
+
+    if ((error = dlerror()) != NULL) print_error(error);
+    
+    free_ptr(ptr);
+    sprintf(buffer, "free address: %p\n", ptr);
+    write(1, buffer, strlen(buffer));
+}
+#endif
+```
+
+注意到 sprintf 用来格式化 buffer，而实际输出的时候使用的是一个 syscall，输出的时候，通过 write 写入到 1(STDOUT_FILENO)的方式实现 stdout
+
+>   参考：[File descriptor - Wikipedia](https://en.wikipedia.org/wiki/File_descriptor)、[c - The difference between stdout and STDOUT_FILENO - Stack Overflow](https://stackoverflow.com/questions/12902627/the-difference-between-stdout-and-stdout-fileno/12902707#12902707)
+>
+>   特别是 stackoverflow 上的回答，STDOUT_FILENO = fileno(stdout) 真的是绝了
+
+编译的时候首先需要生成 share object，并且在运行的时候需要手动添加 LD_PRELOAD 环境变量
+
+```shell
+$ gcc -DRUNTIME -shared -fpic -o my_malloc.so my_malloc.c -ldl
+$ gcc -o test_run_time test.c
+$ LD_PRELOAD="./my_malloc.so" ./test_run_time
+malloc: 32 bytes, address: 0x559017193260
+free address: 0x559017193260
+```
+
+# 异常控制流
+
+## 控制流
+
+PC 的值如果为一个序列 $a_0,a_1...a_{n -1}$，每次从 $a_k$ 到 $a_{k + 1}$ 称为控制转移，控制转移的序列就是 control flow (控制流)
+
+>   其实就是就是指令的序列
+
+physicial control flow (物理控制流)：硬件正在执行的实际指令序列
+
+对于程序而言，通常控制流在内存中按照顺序执行，两种改变控制流的机制：
+
+* 分支和跳转：branches、jumps
+* 方法调用和返回：procedure call、return
+
+以上机制根据**程序状态**变化而改变控制流，比如分支需要检查条件控制代码，基于比较的结果进行分支处理；
+
+而有时我们希望可以根据系统状态改变控制流，为了处理对于整个系统而言的**系统状态**，需要 ECF（异常控制流）
+
+## 异常
+
+异常本身就是控制流的突变，如下图：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/exception.png)
+
+应用程序执行指令$I_{curr}$，随后处理器的状态发生变化，称为事件；一些典型的事件比如：缺页异常(fault)、请求磁盘读写(trap)、IO 中断(interrupt)
+
+处理器检测到事件发生后，会通过异常表，调用异常处理函数处理异常
+
+异常处理完成后有三种情况：
+
+* 返回至当前指令$I_{cur}$
+
+* 返回到下一条指令$I_{ne}$
+* 中止程序
+
+### 异常处理
+
+系统中的每种异常都会被分配一个非负的异常号(exception number)，异常号一部分是处理器设计人员分配的(硬件分配)、一部分是操作系统内核设计人员分配的(软件分配)
+
+在设备加电启动后，操作系统会分配并初始化一个跳转表，即异常表(exception table)，表中的第 k 项保存的就是异常号为 k 的对应的异常处理程序的地址
+
+>   尽管叫做 table，其实是 array
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/exception_table.png)
+
+这样只要发生了一种异常，就对应了一个异常号(非负整数)，而通过这个表(地址数组)，就可以找到当前异常对应的异常处理程序的位置
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/locate_exception_handler.png)
+
+异常表的起始地址放在了异常表基址寄存器中，发生异常后，处理器寻址的方式如上图
+
+>   这个图说的是 64 位 系统中发生了异常的查询，因为 64 位系统地址占用 8 Bytes 保存，故 exception handler 的地址保存在为：base + 8 * exception
+
+前面对于异常的描述，让异常处理程序看起来就是调用了一个函数，只能说二者确实很类似，但：
+
+*   普通的函数调用(过程调用)后，会直接执行下一条指令，而对于异常处理函数，调用结束后可能回到当前指令 $I_{cur}$，也可能回到下一条指令 $I_{ne}$，还可能终止程序(abort)
+*   相比于普通的过程调用，调用异常处理程序前，处理器可能会把一些处理器状态压入栈中
+*   当异常导致了控制从用户态转移到了内核态，上述所有的内容(包括方法返回地址、处理器状态)，其实将被压入了内核栈
+*   异常处理程序本身是运行在内核态的，其对于所有的系统资源具有最高的访问权限
+
+### 异常分类
+
+异常可以分为同步异常和异步异常
+
+* 异步异常：就是中断(interrupt)，通过设置处理器的引脚而改变其状态，对应的引脚就是中断引脚，完成异常处理后，**程序返回至下一条指令**
+
+> 这个时候的异常处理程序也被称为中断处理程序
+>
+> 举例来讲，当数据从磁盘加载到内存中，通过设置中断引脚通知处理器完成加载
+
+* 同步异常：有三类
+
+  * traps：陷阱，故意的异常，完成异常处理后，程序返回至下一条指令
+
+  * faults：故障，可能是可恢复的异常，完成异常处理后，程序返回至当前指令或中止
+  
+  * aborts：中止，不能恢复的异常，完成异常处理后中止程序
+
+这里主要考虑同步异常
+
+
+#### trap
+
+就是 symtem call(系统调用)，是用户程序和内核之间的接口，用户程序通过系统调用向内核请求服务，比如请求读取文件(read)、fork 一个子进程、加载一个程序(execve)、终止当前进程(exit)
+
+从编码的角度上，system call 和普通的 procedure call 基本没什么区别，但当运行起来就很不一样了。普通的 procedure call 进行发生在用户态，因此指令的类型，可以正常寻址的范围都是受限的；但是 system call 发生在内核态，可以执行任意的指令，访问内存空间中的任意地址
+
+#### fault
+
+出现了 fault 说明程序出现了错误，发生了 fault 后，控制将转移到 fault handler (通过异常表)，如果故障处理程序(fault handler)可以修复这个错误，那么程序将回到引起错误的指令处重新执行，否则将调用内核中的 abort 程序终止当前程序
+
+典型的可修复的 fault：page fault exception(缺页异常)，指令中的虚拟地址对应的页尚未保存在内存中，那么需要从磁盘中获取
+
+#### abort
+
+不可修复错误，直接调用 abort 终止程序
+
+### linux/X86_64 中的异常
+
+X86_64 中定义了 256 种异常，其中 0~31 号异常是 Intel 架构师定义的，不管是 linux 还是 windows，这部分的异常类型都是一样的，而 32~255 对应了操作系统中定义的各种 interrupt 和 trap
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/exceptions_X86_64.png)
+
+#### fault&abort
+
+*   divide error: 除 0 异常，发生这个异常之后直接终止程序，linux shell 会报错 floating exception
+*   general protection fault: 很多操作都会导致这个异常，比较典型的是程序访问了不该访问的地方，发生这个异常后直接终止程序，在 linux shell 中会报错 segmentation fault
+*   page fault：这个前面提到了，访问的页不在内存中，需要从硬盘中换进来，这个异常不会导致程序的终止，在完成换页之后，程序会重新执行产生 page fault 的指令
+*   machine check: 硬件错误 -> 寄
+
+#### system call(trap)
+
+linux 中定义了几百种 system call，每种系统调用都使用了唯一的整数标识，每个标识对应了内核中一个跳转表中的一个偏移量，这样通过编号，可以快速定位对应的 system call(就像异常号定位异常一样)
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/sys_call.png)
+
+>   注意这里是系统调用的跳转表，而不是异常跳转表，**所以系统调用号和异常号并不一致**
+
+c 可以直接进行系统调用，毕竟 linux 本身就是 c 实现的，但实际中，用户很少直接原生通过 c 进行 syscall，毕竟 libc 中已经写好了很多 syscall 的包装函数，可以通过更简单的方式进行 syscall
+
+最典型的例子就是之前在 [run time interposition](#run time interposition) 中通过 write 进行打印输出，正常去情况下使用 printf 直接打印，格式统一，既方便又简单
+
+>   不过因为 printf 内部实现，在不同版本的 gcc 中，不能保证都不调用 malloc 函数，因此在 run time interposition 中，是通过直接 write 输出的
+
+在汇编层面，有指令 syscall n，表示当前程序调用系统调用 n，在 linux/X86_64 中所有的系统调用都使用寄存器传递参数，和普通的过程调用不太一样的地方是，系统调用使用寄存器依次为 %rdi、%rsi、%rdx、%r10、%r8、%r9(其实就是使用 %r10 替换了 %rcx)
+
+而在系统调用前，使用 %rax 保存系统调用号，系统调用结束后返回值放在 %rax 中，如果返回值为负值，说明系统调用发生了错误
+
+## 进程
+
+**进程是正在运行的程序的实例**，程序运行在进程的 context(上下文中)，context 中保存了各种状态，包括程序的代码段、数据段、栈、寄存器的内容(包括 PC)、环境变量...
+
+进程提供了两个关键的抽象：
+
+* logical control flow：每一个进程好像拥有独自的处理器和寄存器
+
+  > 除了有的时候指令的时间长了一点之外，程序感觉自己拥有一颗独有的处理器
+
+* private address space：每一个进程好像拥有独自的代码、数据、堆栈区域
+
+    >   通过 virtual memory 实现
+
+当进程发生切换，其实对应了 address space 和 register 的修改，也就是 context switch
+
+### 并发流
+
+如果使用 debugger 调试程序，使其单步执行，跟踪 PC 的取值，会发现 PC 对应了可执行目标文件中一串连续的值，对应了一组连续的指令序列，称 PC 取值的序列为 logical control flow(逻辑控制流)
+
+当多个程序并发运行时，内存中将存在多个 logical control flow，那么一种可能的情况如下：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/illustration_of_logical_control_flows.png)
+
+此时**处理器的物理控制流，被分为了三个逻辑控制流**，一个进程对应了一个逻辑控制流, 从图中可以看出，进程之间是轮流占用处理器的，然而对于一个进程上下文中的程序而言，它仿佛是独占了这个处理器，只不过有的指令的"执行时间"稍微长了一点
+
+只要两个逻辑控制流在时间上重叠，那么两个流是并发的，其中每个逻辑控制流执行的一段时间称为 time slice(时间片)
+
+>   上图中 AB 是并发流、AC 是并发流、BC 不是并发流
+
+**并发和处理器核心的数量，计算机的数量都无关**，如果在两台计算机上，运行的两个程序，时间上，其逻辑控制流存在重叠，那么这两个流就是并发的
+
+只不过，对于那些运行在不同核心、不同计算机上的多个流，一般称其为并行流
+
+>   可以认为并行是并发的的一个子集
+
+### 私有地址空间
+
+进程的私有地址空间是进程的第二个特点
+
+对于一个 n 位的设备，地址空间范围为[0, $2^n - 1$]，每个运行在进程中的程序好像都独立占用了这个空间
+
+>   事实上程序在物理内存中占用的空间，是不能被其他进程读写的，正是因此，才体现出地址的私有特点
+
+一般而言私有地址空间的结构是相同的在 x86_64 的 linux 中，进程占用的私有地址空间如下：
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/process_add_space.png)
+
+空间顶部是被内核占用的，用户程序不可以对其改写，64 位系统中用户程序实际可用的地址空间范围为[0, $2^{48} - 1$]
+
+>   代码段都是从 0x400000开始的，栈从上往下生长，堆从下往上生长
+
+### 用户态和内核态
+
+虽然前面说过了用户程序可以访问的地址空间就 [0, $2^{48} - 1$] 这么大，但并不是所有的程序都会自觉遵守这个规则，所以肯定是要有一定的限制措施的
+
+在硬件层面，处理器会使用某个控制寄存器中的 bit mod(位模式)，标识了当前进程具有的权限；当设置了位模式时当前进程运行在内核态，可以执行处理器指令集中的任何指令，并访问虚拟地址空间中的任何地址；如果没有设置，那么进程将处于用户态，此时进程不能执行 privilieged instructions(特权指令)，比如那些 IO 请求是不能直接发起的，当然改变控制寄存器的 bit mod 实现状态切换的，在用户态下也是不能访问内核代码和数据的。在用户态执行非法操作后，会引起 protection fault
+
+运行用户代码的进程默认会处于用户状态，进程需要借用异常才能进入内核态(没错 interrupt 和 fault 也会进入内核态，不仅仅有 syscall)，发生异常后控制会传递给 exception handler，此时处理器会变为 kernel mode，完成异常处理函数后，处理器将回到 user mode
+
+这种机制其实是一种保护，保护操作系统内核处于一个安全的状态(自己写的程序崩了，最多就是当前进程挂了，但不会影响到操作系统的正常运行)
+
+为了让用户方便查看内核信息，linux 将内核中的各种数据结构的信息保存在了 /proc 中，比如 /proc/cpuinfo 中保存了处理器的信息，/proc/[pid] 文件夹中保存了某个进程的信息
+
+### Context Switching
+
+所有的进程都是通过内核管理的，内核通过 context switching 实现多任务
+
+>   这里的内核是可以统一的概念，而并不是一个单独的进程，内核运行在现有进程的上下文中
+
+context switch 的结果就是 logical control flow switch
+
+内核为每个进程维护一个 context(上下文)，进程的 context 是内核重新启动一个被抢占的进程所需要的状态信息，具体的由一些对象的值构成，包括了：16 个通用寄存器、浮点寄存器、PC、用户栈、状态寄存器、内核栈、其他内核数据结构(比如页表、文件表)
+
+在进程中的程序运行的某个时刻，内核可能抢占当前正在运行的进程，并启用一个之前被抢占的进程，这种行为称为 scheduling(调度)
+
+>   一般的发生了异常就会进入内核，此时内核会进行调度，可能暂时挂起当前进程(注意这里不是让当前进程 stop), 然后让新的进程运行
+
+具体的，让某个进程运行的这部分逻辑写在了内核调度器中，内核调度了进程内核，会进行以下三个操作：
+
+*   保存当前进程的上下文信息
+*   恢复被调度进程的上下文信息
+*   将控制转移到被调度的进程
+
+内核确定上下文切换的时刻可能是随意的，有可能一个进程发起了系统调用，请求读取硬盘中的数据，此时内核选择让当前进程阻塞，而调度其他进行；而当数据完成了从硬盘到内存的转移后，此时将触发中断，内核可能会再次执行进程调度，让刚刚被阻塞的进行恢复运行，具体的如下图所示：
+
+![](../img/context_switch.png)
+
+进程 A 正在执行，随后发起系统调用后进入内核态，因为 read 而阻塞等待数据传输，此时内核选择调度 B 进程开始执行(调度部分是在内核态，B 进程运行是在用户态)，当数据完成传输后，发生中断而进入内核态，此时内核决定让阻塞的 A 进程恢复运行
+
+>   中断处理函数返回后内核完全可以选择继续让 B 进程执行，而继续让 A 进程阻塞
+
+## Wrap System Call
+
+进行系统调用的时候，需要检查返回值，确认系统调用没有出现异常，再执行后面的程序
+
+> 除非系统调用类型是 void
+
+一般的当系统调用返回了负数说明发生了错误，此时需要进行错误处理(如果继续运行可能导致程序报错而进入 abort 被终止)
+
+在 linux 中如果系统函数发生了错误，将返回 -1 (一般是 -1)，并设置全局整数变量 errno，用来标识错误的类型
+
+以 fork 系统调用为例子：
+
+```c
+pid_t pid;
+if （(pid = fork()) < 0) {
+    // 将错误打印到 stderr 中
+	fprintf(stderr, "fork error %s\n", strerror(errno));
+    exit(0);
+}
+```
+
+正常情况下 fork 子进程成功时，将放回子进程的 pid，但如果返回 -1 表明发生了错误，因此需要进行错误处理
+
+这里将错误信息打印输出了，其中 strerror() 函数会根据输入的 errno 返回一个字符串，指明具体的错误原因
+
+因为只要是系统调用基本上都是这个格式，而且每次都这么写确实太麻烦了，所以有人提出了将错误处理逻辑抽取出来封装为函数
+
+```c
+void unix_error(char* msg) {
+    fprintf(stderr, "%s : %s\n", msg, strerror(errno));
+    exit(0);
+}
+```
+
+现在 fork 的错误处理可以被简化为：
+
+```c
+if ((pid = fork()) < 0) unix_error("fork error");
+```
+
+然而还有人觉得不行，我就是希望进行系统调用，那你就给我系统调用，如果出现了问题，那不执行就行了，为什么编码的时候还需要引入额外的代码，不够优雅，所以进一步提出了错误处理包装函数
+
+```c
+pid_t Fork(void) {
+    pid_t pid;
+    if ((pid = fork()) < 0) unix_error("fork error");
+    return pid;
+}
+```
+
+>   在 CSAPP 后面的介绍中，都是使用了错误处理函数代替了可能出错的系统调用
+
+## 进程控制
+
+### 获取进程ID
+
+```c
+# include <sys/types.h>
+# include <unistd.h>
+// 获取当前进程的 pid
+pid_t getpid(void);
+// 获取当前进程的父进程的 pid
+pid_t getppid(void);
+```
+
+类型 pid_t 定义在 sys/types.h 中，不过这两个类型在 linux 中被定义为了 int
+
+一个简单的例子：
+
+```c
+# include <unistd.h>
+# include <sys/types.h>
+# include <stdio.h>
+int main() {
+    pid_t pid = getpid();
+    pid_t ppid = getppid();
+    printf("pid is:%d\nppid is:%d\n", pid, ppid);
+    return 0;
+}
+```
+
+### 进程的状态
+
+对于进程可以认为一共具有三种
+
+* running：正在执行指令，或正处于调度队列，可以被调度
+* stopped：此时进程不会被内核调度，当进程收到 SIGSTOP、SIGTSTP、SIGTTIN、SIGTTOUT 时会进入这个状态，只有收到 SIGCOUT 进程才会继续运行
+* terminated：进程中止的三种原因：
+    *   收到终止程序的信号
+    *   从主函数 main 中返回
+    *   调用 exit()
+
+>   上面反复提到的信号的概念，先别急，后面有[信号](#信号)，信号可以认为是通过软件实现的中断，很神奇
+
+而在 java 中，认为**线程**存在 5 种状态：new(刚刚被创建)、runnable(可以被调度或正在运行的状态)、blocked(被 IO 阻塞或争夺同步锁失败)、waiting(调用 wait 方法)、TimeWaiting(带有时间的 wait 方法)、terminated(终止了)，具体的参考[java 线程生命周期](./多线程.md#线程的声明周期)
+
+>   因为线程和进程其实不是一个层次的东西，所以也没什么比较的
+
+system call _exit 的签名如下：
+
+```c
+# include <unistd.h>
+// 进程将以 status 退出(这个就是 main 函数的那个 return 0)
+void _exit(int status);
+```
+
+>   _exit 的包装函数 exit 定义在 stdlib.h 中
+>
+>   exit 是一个特殊的 procedure call，因为调用一次后，这个函数不会返回(程序直接终止)
+
+### 创建进程
+
+父进程调用 fork 创建子进程，其函数签名如下：
+
+```c
+# include <sys/types.h>
+# include <unistd.h>
+// 如果是子进程的话返回 0，如果是父进程的话返回子进程的 pid，出错情况返回 -1
+pid_t fork(void);
+```
+
+>   fork 是一个特殊的 system call, 调用一次，却会返回两次
+
+完成调用后，子进程拥有和父进程相同的地址空间，但父子进程的 address space 是相互独立的
+
+>   代码段、数据段，堆，用户栈，共享库是完全相同的
+>
+>   此外子进程和父进程的文件描述符是一样的，父进程打开的文件，子进程也可以访问
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/process_add_space.png)
+
+下面给出一个具体的例子，因为这里进行了系统调用(fork 函数)，根据前面的介绍，这里使用安全的错误处理函数进行封装，所有的的函数实现放在了 safe_call.c 中，编译的时候，将 safe_call.c 编译为 share object, 而为了将接口提供给 main 函数使用，将实现的方法声明在了 safe_call.h 中
+
+```c
+// safe_call.h
+extern pid_t Fork(void);
+
+// safe_call.c
+#include <sys/types.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+
+void unix_error(char* msg) {
+    fprintf(stderr, "%s: %s\n", msg, strerror(errno));
+    exit(1);
+}
+
+pid_t Fork(void) {
+    pid_t pid;
+    if ((pid = fork()) < 0) unix_error("fork error");
+    return pid;
+}
+```
+
+>   编译得到 share object:
+>
+>   ```shell
+>   $ gcc -shared -fpic -o safe_call.so safe_call.c
+>   ```
+>
+>   如果不想自己写这些安全处理函数，完全可以使用 CSAPP 自带的库：[csapp.h](http://csapp.cs.cmu.edu/3e/ics3/code/include/csapp.h)、[csapp.c](http://csapp.cs.cmu.edu/3e/ics3/code/src/csapp.c)
+
+测试例程为：
+
+```c
+// test.c
+#include "safe_call.h"
+#include <stdio.h>
+#include <sys/types.h>
+
+int main(int argc, char** argv) {
+    pid_t pid = Fork();
+    int x = 1;
+    if (pid > 0) {
+        x++;
+        printf("parent process, pid is %d, children pid is %d, x is %d\n", Getpid(), pid, x);
+    	// parent process, pid is 20287, children pid is 20288, x is 2
+    }
+    else {
+        x--;
+        printf("children process, pid is %d, x is %d\n", Getpid(), x);
+        // children process, pid is 20288, x is 0
+    }
+    return 0;
+}
+```
+
+>   因为需要 link share object，因此编译的时候需要在参数中添加对应的 .so 文件
+>
+>   ```shell
+>   $ gcc -o test test.c safe_call.so
+>   $ ./test
+>   ```
+
+从上面的示例，可以看到：
+
+*   fork 出来的子进程和父进程是并发的，二者的执行顺序不能确定，多次运行，有可能子进程先打印，也有可能父进程先打印
+*   fork 得到的子进程的和父进程的虚拟地址空间完全一致，但二者相互独立，不受影响(printf 语句打印输出的 x 是不同的)
+*   fork 出来的子进程和父进程是共享文件的(子进程和父进程都在 bash 中打印输出结果)
+
+### 回收子进程
+
+当子进程终止的时候，它不会直接被内核清除，而会持续占用系统资源，保持一种已终止的状态，直到被其父进程回收(reaped)
+
+父进程回收子进程，从内核中获取子进程的退出状态(exit(status) 或者是 main 的 return)，随后内核才会彻底丢弃终止的(terminated)进程
+
+对于那些已经终止了，但未被回收的进程，称为僵尸进程(zombie)
+
+> 可以认为，僵尸进程是一种内存泄漏
+
+显然，一定会出现父进程早于子继承终止的情况，此时内核会安排 init 进程，作为孤儿进程(orphaned children)的养父进程(adopted parent)
+
+init 进程的 pid 为 1，是系统启动时内核创建的，永远不会终止，这个进程本身就是所有进程的祖宗进程
+
+一个比较好的编程习惯就是回收子进程，特别对于 web 程序而言，创建了子进程还不回收，早晚有一天因为内存泄漏，导致程序崩溃
+
+父进程调用 waitpid()/wait() 方法可以回收 terminated(或 stopped)的子进程，父进程可以通过这个方法获取子进程的结束信息，同时内核将清除掉子进程
+
+```c
+# include <sys/types.h>
+# include <sys/wait.h>
+// 正常返回子进程的 pid，如果时 WNOHANG 的话还可能返回 0，其他出错情况下，返回 -1
+pid_t waitpid(pid_t pid, int *statusp, int options);
+```
+
+这个函数有三个参数，好像有点复杂，其实函数的目的还是很清晰的：调用 waitpid，在默认情况下(options 为 0)，会挂起当父进程，直到wait set(第一个参数) 中的一个进程终止了，此时 waitpid 函数会返回对应终止进程的 pid
+
+>   默认的，如果父进程在调用 waitpid 之前子进程就终止了，那么此时 waitpid 会立刻返回
+
+*   pid: 这个参数表示了一个集合，即 waiting set，如果 pid 为一个正数，表示当前集合中只包含了对应 pid 的进程；如果 pid 为 -1，表示当前集合为父进程的所有子进程
+*   statusp: 这个参数用来保存子进程退出时的状态
+*   options: 这个参数表示了 waitpid 的回收策略，可以通过宏定义修改行为，默认的话会阻塞当前进程
+
+#### 修改默认行为
+
+默认的情况下，会阻塞当前进程，且只会回收 terminated 的进程，不包括 stopped 的进程，options 支持以下几种参数：
+
+*   WNOHANG：如果 waiting set 中的子进程都不处于 terminated 的状态，那么立刻返回，返回的 pid 为 0
+
+*   WUNTRACED：阻塞当前进程，直到子进程 terminated 或 stopped
+
+*   WNOHANG|WUNTRACED：上面两种的组合，如果都不是 terminated 或 stopped，就立刻返回，返回的 pid 为 0
+
+*   WCONTINUED: 阻塞当前进程直到 waiting set 中的一个进程 terminated 了，或者 stopped 的进程收到 SIGCONT 了
+
+    >   被 stopped 的进程收到 SIGCONT 后恢复为可以被调度器调度的状态
+
+#### 检查子进程的退出状态
+
+因为 waitpid 提供了参数 statusp，该参数是最终子进程的状态的一个 bit mode，使用定义在 sys/wait.h 中的宏，进行状态翻译
+
+要明确的是，状态指针是 statusp，而状态使用 status 表示，即 statusp = &status
+
+*   WIFEXITED(status)：如果子进程通过 exit() 或 return 返回的话，返回 true
+*   WEXITSTATUS(status)：在满足上一条的前提下，返回子进程退出的状态码
+*   WIFSIGNALED(status)：如果子进程因为收到了信号，导致当前是 terminated 状态，返回 true
+*   WTERMSIG(status)：在满足上一条的前提下，返回导致子进程终止的信号编号
+*   WIFSTOPPED(status)：如果子进程当前是 stopped 状态，返回 true
+*   WSTOPSIG(status)：在满足上一条的前提下，返回导致子进程处于 stopped 的信号编号
+*   WIFCONTINUED(status): 如果子进程收到了 SIGCONT, 返回 true
+
+#### 错误返回
+
+基本上系统调用都会有错误返回，对于 waitpid 而言：
+
+如果当前进程没有未被回收的子进程，那么调用这个函数将返回 -1，同时 errno 会被编码为 ECHILD
+
+如果当前进程调用了 waitpid 而进入阻塞，但被信号打断了，那么这个函数也会返回 -1，同时 errno 会被编码为 EINTR
+
+>   这里就可以看到信号确实很常用
+
+#### 简单的 wait()
+
+毕竟 waitpid 三个参数，还是太复杂了
+
+```c
+# include <sys/types.h>
+# include <sys/wait.h>
+
+pid_t wait(int *statusp);
+```
+
+从函数签名上，就能看出，相比于 waitpid 简化了参数 pid 和 options，这个简单的 wait(&status) 其实等效于 waitpid(-1, &status, 0);
+
+>   也就是说 wait 默认也会阻塞当前进程
+
+#### 举个例子
+
+```c
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <stdio.h>
+#include <errno.h>
+#include <stdlib.h>
+#include "safe_call.h"
+#define N 10000
+
+int main() {
+    int i,status;
+    pid_t pid;
+    for (i = 0; i < N; i++) {
+        if (Fork() == 0) exit(1 + i);
+    }
+    int idx = 0;
+    while ((pid = wait(&status)) != -1) {
+        printf("child: %d terminated\n", pid);
+        if (WIFEXITED(status)) printf("exit code: %d\n", WEXITSTATUS(status));
+        idx++;
+    }
+    if (errno != ECHILD) unix_error("parent has been interrupted\n");
+    printf("total children: %d\n", idx);
+    return 0;
+}
+```
+
+父进程会创建 N 个子进程，所有的子进程及运行后退直接退出，退出状态码是一个和 i 相关的偏移量
+
+随后父进程完成，会回收尝试回收子进程，并将子进程的退出状态保存到 status 中
+
+子进程全部回收完成的标志是 wait 方法返回 -1，当然，如果返回的是 -1 还有可能是阻塞状态的父进程被打断了，如果是这种情况的话，还会打印输出一下
+
+要明确的是对子进程的回收是不确定的，我们无法知道那个进程先被回收
+
+### 进程休眠
+
+sleep 函数用来让进程休眠一段时间
+
+```c
+# include <unistd.h>
+
+unsigned int sleep(unsigned int secs);
+```
+
+>   从函数签名中可以看到休眠的单位是秒
+
+因为 sleep 函数是用来休眠的，所以按理说返回值应该没什么用才对；这里就又要提到信号了，如果 sleep 的进程被信号中断，过早的结束了休眠，那么 sleep 函数会提前返回，所以这里 sleep 函数的返回值是剩余需要休眠的时间(单位为秒), 如果 sleep 函数正常结束，显然，这个函数的返回值应该是 0
+
+和 sleep 具有类似作用的还有函数 pause
+
+```c
+# include <unistd.h>
+
+int pause(void);
+```
+
+这个当进程调用了这个函数，将使其进入休眠状态，这个函数的返回值一直都是 -1，pause 函数会被信号中断，收到信号后进程就会从休眠状态恢复
+
+### 加载执行程序
+
+调用 fork 后子进程和父进程的虚拟地址空间完全一致，这么说来代码段也是一样，那这样父进程和子进程不就执行同一种任务了吗，这怎么能行
+
+在 linux 中可以通过调用 execve 实现子进程加载其他程序
+
+```c
+# include <unistd.h>
+
+int execve(const char *filename, const char *argv[], const char *envp[]);
+```
+
+execve 加载并运行 filename 对应的文件，这个文件可以是一个 object file 也可以是一个 script file，并以 argv 为参数，envp 为环境变量
+
+>   这个 system call 也很具有特点，调用一次，如果正常运行的话，永远都不会返回，而如果运行出错，会返回 -1
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/argv&envp_of_execve.png)
+
+可以看到 argv 是一个指针数组，数组中最后一个元素指向了 null，其他的项均为一个参数字符串；envp 也是类似的，envp 的字符串都是以 [key = value] 的形式出现的
+
+>   习惯上 argvp[0] 和 filename 相同，比如上面的 ls，其实就是 bin 下的文件 ls
+>
+>   其他的一般的写法，比如我们写好了 test.c 编译得到 test，执行时使用命令 ./test 那么 argv[0] 就是 ./test
+
+execve 加载 filename，启动程序，将控制传递给新程序的主函数，其主函数的格式如下：
+
+```c
+int main(int argc, char **argv, char **envp);
+```
+
+>   argc 用来指明 argv 数组中非空指针的数量
+
+调用 execve 之后 address space 将被覆盖，新程序的栈结构如下所示：
+
+>   整个 address space 都被替换掉了，留下来的只有 pid，和 file descriptors 是和父进程相同的
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/new_program_stack.png)
+
+所有的字符串(使用 NULL 结尾)在栈底，从栈底到栈顶，分别是环境变量字符串，然后才是参数字符串；在往上是指针数组，包括了环境变量指针数组和参数指针数组，这两个数组的每一项都指向了字符串部分的一个字符串，不过 argv 数组和 envp 数组的结尾指向了 NULL
+
+参数数组的开头通过 main 函数的第二个参数 argv 表示，环境变量的数组的开通通过 main 函数的第三个参数 envp 表示，或者通过全局变量 environ 表示
+
+在栈顶，有新的 main 函数，新的 main 函数栈帧后面紧挨着的是系统启动函数 lib_start_main 的栈帧
+
+linux 的提供了很方便的接口供用户设置环境变量：
+
+```c
+# include <stblib.h>
+// 获取名为 name 的环境变量的 val，如果不存在对应 name 的环境变量返回 NULL
+char *getenv(char *name);
+// 设置名为 name 的环境变量的值为 val，如果设置成功返回 0，否则返回 -1
+int setenv(const char *name, const char *newvalue, int overwrite);
+// 删除名为 name 的环境变量
+void unsetenv(char *name);
+```
+
+函数 setenv 会将名为 name 的环境变量设置为 val；注意到这个函数具有第三个参数 overwrite，如果这个参数为 0，那么如果原来环境变量已经存在时，再次调用这个函数不会进行替换；
+
+比如现在需要在 /usr/include 目录下执行 ls 指令，并使用参数 -lt 进行查询(-l 表示展示文件全信息，-t 表示按照时间排序)
+
+此时需要修改 safe_call.c(包装函数)，添加 execve 的包装方法 Execve()
+
+```c
+void Execve(const char* filename, char* const argv[], char* const envp[]) {
+    if (execve(filename, argv, envp) < 0) {
+        printf("%s: Command not found\n", argv[0]);
+        exit(0);
+    }
+}
+```
+
+>   这里的函数声明和 unistd.h 中声明的一致
+
+```c
+#include <stdio.h>
+#include <sys/wait.h>
+#define __USE_GNU
+#include <unistd.h>
+#include "safe_call.h"
+
+int main() {
+    pid_t pid = Fork();
+    // 注意到 argv[] 数组必须以 NULL 结尾
+    char* const argv[] = {"/bin/ls", "-lt", "/usr/include", (char*)0};
+    if (pid == 0) Execve(argv[0], argv, environ);
+    else {
+        int status;
+        wait(&status);
+        if (WIFEXITED(status)) printf("child exit with %d\n", WEXITSTATUS(status));
+    }
+    return 0;
+}
+```
+
+### 使用 fork 和 execve 加载程序
+
+因为 linux 下的 fork 机制，使得 linux 下所有的进程都是从 init 进程(pid 为 1) fork 得到的，比如 shell 进程, Daemon 进程(守护进程)...
+
+在 shell 中运行程序本质上就是 fork 一个子进程，然后在这个子进程中运行指定程序
+
+在 CSAPP 中实现了一个简单的 shell 程序
+
+```c
+#include <stdio.h>
+#include <sys/types.h>
+#include <string.h>
+#define __USE_GNU
+#include <unistd.h>
+#include <wait.h>
+#include <stdlib.h>
+#include "safe_call.h"
+
+#define MAXLINE 128
+#define MAXARGS 10
+
+int parse_line(char* buff, char* argv[MAXARGS]) {
+    int argc = 0;
+    int is_bg = 0;
+    char* delim;
+    
+    buff[strlen(buff) - 1] = ' '; // 结尾的 '\n' 替换为 ' '
+    while (buff && *buff == ' ') buff++; // 忽略开头的空格
+
+    // 每次 delim 指向了 ' ' 开始的位置 
+    while ((delim = strchr(buff, ' '))) {
+        // 将分隔符位置截断
+        *delim = '\0';
+        argv[argc++] = buff;
+        buff = delim + 1;
+        while (buff && *buff == ' ') buff++;
+    }
+
+    argv[argc] = NULL;
+
+    // 输入了空行
+    if (argc == 0) return -1;
+
+    if (!strcmp(argv[argc - 1], "&")) {
+        // 仅输入了 &
+        if (argc == 1) return -1;
+        is_bg = 1;
+        argv[--argc] = NULL;
+    }
+
+    return is_bg;
+}
+
+int build_in_command(char* argv[MAXARGS]) {
+    if (!strcmp("quit", argv[0]) || !strcmp("q", argv[0])) exit(0);
+    // 后续支持更多的内置命令，如果是内置命令的话返回 1
+    return 0;
+}
+
+void eval(char* buffer) {
+    pid_t pid;
+    int is_bg;
+    char* argv[MAXARGS];
+
+    is_bg = parse_line(buffer, argv);
+
+    // 空行
+    if (is_bg < 0) return;
+
+    if (!build_in_command(argv)) {
+        if (!(pid = Fork())) Execve(argv[0], argv, environ);
+        
+        if (!is_bg) {
+            int status;
+            Waitpid(pid, &status, 0);
+        } else printf("%d run %s\n", pid, argv[0]);
+    }
+}
+
+int main() {
+    char buffer[MAXLINE];
+    while (1) {
+        printf(">");
+        Fgets(buffer, MAXLINE, stdin);
+        eval(buffer);
+    }
+    return 0;
+}
+```
+
+整个 shell 其实做的就是读取输入和求值，所以 main 函数很简单，打印一个 prompt，然后读取输入，并通过 eval 函数解析输入
+
+解析时，首先需要从输入中获取需要执行的命令和其参数，具体的就是通过 parse_line 方法得到，parse_line 内部其实就是不断通过 " " 分割字符串
+
+获取到输入命令和各个参数后，首先判断当前命令是否为 shell 内置命令，目前的内置命令只有 quit，表示退出
+
+如果不是内置命令的话，需要 fork 子进程执行特定程序
+
+因为 shell 支持前台进程和后台进程，具体的通过结尾参数体现，如果命令行结尾参数为 & 那么表示这是一个后台进程，此时 shell 程序不需要阻塞等待子进程结束，而更为一般的情况下，子进程为一个前台进程，此时 shell 进程需要阻塞等待子进程结束
+
+这里其实有一个问题，那就是 shell 程序可以正常回收前台进程，但是却无法回收后台进程，这会导致内存泄漏的问题，后面的 signal handler 用来解决这个问题，简单来说，就是子进程结束的时候，会向父进程发送一个信号，父进程收到后，需要调用 signal handler 完成进程回收
+
+## 信号
+
+singal is a small message，当某些事件的发生时，会通知系统中的进程，下图给出了 linux 中的 30 种信号：
+
+<img src="https://cdn.jsdelivr.net/gh/SunYuanI/img/img/linux_signal.png" id="signal_in_linux">
+
+>   11 号信号 SIGSEGV，当进程访问了不该访问的 segmentation 后，内核会将进程发送这个信号，进程的默认行为就是终止进程
+>
+>   17 号信号 SIGCHILD，当子进程 termination 或 stopped 后，父进程会收到这个信号，shell 可以利用这个信号回收后台进程
+
+底层的硬件中断，纯粹是通过硬件实现的，中断发生后，内核会调用异常处理程序处理中断，所以作为用户正常情况下是不知道已经发生了中断的。但现在有了信号，通过这种机制，可以告知用户进程发生了中断
+
+比如一个用户进程执行了除零运算，发生了中断，随后内核会向用户进程发送信号 SIGFPE、如果用户进程运行了非法指令，内核会发送 SIGILL...
+
+### 一些名词
+
+* 发送信号：内核通过更改目标进程上下文的某个状态，实现将信号发送到目标进程；一般情况下内核发送向进程发送信号有两种情况：
+
+  * 内核检测到系统事件的发生，比如子进程结束了或者进行了除零运算，或者子进程结束后内核会向其父进程发送信号 SIGCHILD
+
+  * 一个进程调用了 kill 函数，要求内核发送信号给目标进程，比如 shell 中输入 kill -9 [pid] 可以杀死对应 pid 的进程
+
+      >   一个进程可以通过这样的方式给自己发信号，即自己杀死自己
+  
+* 接收信号：当目的进程被迫对内核发送的信号做出反应的时候，进程就接受了信号，所谓的反应分为下面四种：
+
+  * ignore the signal
+  * terminated
+  * stopped
+  
+  * 调用 signal handler 处理信号
+  
+* pending signal(待处理的信号<a id="pending signal"></a>)：指已经发出，但未被接收的信号
+
+*   blocking signal：进程可以选择性的阻塞某种信号，信号被阻塞后，内核仍旧可以向对应进程发出信号，但此时 pending signal 不会被接收
+
+内核在每一个进程的上下文中维护一个 pending 向量和一个 blocking 向量
+
+> 都是一个32位的int类型的变量
+
+对于信号 k，如果内核发送了信号，那么会将进程上下文中 pending 向量中对应位置上的 bit 置位，如果信号 k 被进程接收，那么 pending 向量上对应位置 bit 会被复位
+
+这也就意味着，信号是不会排队的，毕竟 signal 是通过置位实现的，某一位被置为 1，就意味着收到了对应的信号，这样新的同种信号到达不过也就是再次置位 1 而已，因此，**信号不能反映事件发生的次数，仅能反映事件发生了**
+
+### 进程组
+
+每一个进程仅属于一个的进程组，进程组之间通过进程组 ID 进程区分
+
+```c
+# include <unistd.h>
+# include <sys/types.h>
+// 获取当前进程的进程组 ID
+pid_t getpgrp(void);
+// 将对应 pid 的进程组修改为 pgid，默认返回 0，如果发生错误了返回 -1
+int setpgid(pid_t pid, pid_t pgid);
+```
+
+>   默认情况下父进程和子进程属于一个进程组
+
+函数 setpgid 具有两个参数，表示将对应 pid 的进程的进程组修改为 pgid
+
+*   当 pid 为 0 时，表示修改自身的 pgid；
+*   当 pgid 为 0 时，表示修改进程组为当前进程的 pid
+
+考虑 setpgid(0, 0), 第一个参数为 0 表示修改自身的进程组，第二个参数为 0 表示修改自身的进程组为自身的 pid，如果进程 12345 调用了 setpgid(0, 0)，那么进程 12345 的进程组为 12345
+
+>   盲猜一下，进程组的内部实现会不会是并查集，所有的进程默认连到自己，通过 setpgid 链接到其他的连通块
+
+### job
+
+在 unix 中使用 job 描述 shell 中创建的进程，shell 在任意时刻最多具有 1 个 foreground job (前台任务)，但可以具有若干个 background job (后台任务)
+
+shell 会为不同的 job 赋予不同的进程组
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/foreground_background_process_group.png)
+
+可以看到 shell 分别为 foreground job 和 background job 分配了不同的进程组，但在各自 job 内部通过 fork 得到的子进程默认和父进程具有相同的进程组
+
+### 发送信号
+
+#### /bin/kill
+
+不要看到 kill 就认为一定是杀死进程的
+
+```shell
+$ /bin/kill -[n] [pid]
+```
+
+第一个参数表示发出的信号类型，比如最常用的信号 9 表示终止进程；第二个参数表示需要发送到进程的 pid
+
+>   即向 pid 进程发送信号 n
+
+当 pid 为负数时，此时会将其绝对值作为进程组 id，向进程组内的所有进程发送信号
+
+#### 键盘中断
+
+*   <kbd>ctrl + c</kbd>: 内核会向 foreground job 进程组中的所有进程发送 SIGINT 信号，进程收到 SIGINT 默认会进入 terminated 状态
+*   <kbd>ctrl + z</kbd>: 内核回向 foreground job 进程组中的所有进程发送 SIGTSTP 信号，进程收到 SIGTSTP 默认会进入 stopped 状态
+
+#### kill()
+
+linux 中提供了系统调用 kill，用来发送信号
+
+```c
+# include <sys/types.h>
+# include <signal.h>
+// 向 pid 发送信号 sig, 正常情况下返回 0，如果出错了会返回 -1
+int kill(pid_t pid, int sig);
+```
+
+基本的使用方式和上面的 /bin/kill 差不多，整个 syscall 的含义就是向进程 pid 发送信号 sig
+
+*   pid 为 0 时，会向当前进程所在的进程组内的所有进程发送信号(包含自己)
+*   pid 小于 0 时，会向进程组为 -pid 内的所有进程发送信号
+
+举个简单的例子：
+
+```c
+int main() {
+
+    pid_t child;
+
+    if ((child = Fork()) == 0) {
+        pause();
+        // 注意这面这里永远都不会打印，因为子进程在休眠的时已经被终止了
+        printf("child has been killed by parent\n");
+        exit(0);
+    }
+
+    printf("parent want to kill child\n");
+    kill(child, 9);
+    int status;
+    wait(&status);
+    if (WIFEXITED(status)) printf("child terminated by exit or return\n");
+    if (WIFSIGNALED(status)) printf("child terminated by parent\n");
+    return 0;
+}
+```
+
+#### alarm()
+
+alarm 和 kill 最大的区别在于 alarm 主要用于定时的给自己发送信号，特别的，发送的信号为 SIGALRM
+
+```c
+# include <unistd.h>
+// 要求内核在 secs(单位为 s) 后向当前进程发出 SIGALRM 信号
+unsigned int alarm(unsigned int secs);
+```
+
+后一次的 alarm 调用会重置前一次的 alarm，所以 alarm 的返回值其实是前一次 alarm 的剩余时间，如果之前没有进行过 alarm 调用，将返回 0
+
+### 接收信号
+
+当内核将进程 p 由内核模式切换为用户模式的时候，会检查进程 p 未被阻塞的待处理的信号的集合。
+
+因为信号在进程的上下文中是通过 padding 和 blocking 向量描述的，未被阻塞的待处理信号的 bit mode 为 padding & ~(blocking)
+
+当该 bit mode 不为 0 时，内核会强制进程 p 接收某个信号(通常为 id 最小的那个，毕竟通过 lowbit 可以直接计算得到)，进程收到信号后会采取某些行为，进程收到信号后的默认行为有三种(前面的<a href="#signal_in_linux">信号图</a>中所有信号都是这三种反应中的一个)：
+
+* terminate
+* stop，直到接收到信号 SIGCONT
+* ignore
+
+进程接收某个信号后, padding 向量的对应 bit 将被重置
+
+只有当进程 p 的 bit mode 为 0 时，内核才会调度 p 执行其 logical control flow 的 $I_{ne}$
+
+基本上进程接受信号后的默认行为是可以通过系统调用修改的，除了两个例外 SIGKILL(进程 terminated) 和 SIGSTOP(进程 stopped)
+
+```c
+# include <signal.h>
+typedef void(*sighandler_t)(int);
+// 返回之前的 handler，如果调用失败会返回 SIG_ERR(不会设置 errno)
+sighandler_t signal(int signum, sighandler_t handler);
+```
+
+注意到这里使用 typedef 关键字定义了一个函数指针 sighandler_t，所以 syscall signal 的意思是：设置当前进程的信号 signum 的 signal handler 为 handler
+
+一般而言 sighandler_t 的取值有三种：
+
+*   SIG_IGN，设置进程收到信号时忽略这个信号
+
+* SIG_DFL，设置进程收到信号时恢复为默认的行为
+* 其他值会被认为是一个函数地址，对应的函数为 signal handler，当收到信号 signum 的时候会去调用这个 handler
+
+接收信号这里因为涉及到 signal handler，有一些名词：
+
+*   installing the handler(设置信号处理函数): 调用 signal，修改信号的默认的处理方式
+*   catching the signal(捕获信号): 调用 handler
+*   handling the signal(处理信号): the execution of the handler
+
+注意到 handler 的函数签名中存在 int 类型的参数，这表示一个 signal handler 可以处理多种类型的 signal，通过 int 类型的参数进行区分
+
+举个例子：现在修改 <kbd>ctrl + c</kbd> 的默认行为，根据前面[使用键盘发送信号](#键盘中断)，可知本质上在 shell 中使用 <kbd>ctrl + c</kbd> 会向 foreground job 进程组内的所有进程发送信号 SIGINT，现在自定义 SIGINT 的信号处理函数，使得 SIGINT 不能 terminate 当前进程
+
+尽管 signal 函数可能出错，但因为其出错后不会设置 errno，因此，这里的包装函数不使用 unix_error 打印错误信息
+
+```c
+// safe_call.h
+// 因为在 wait.h 中 定义的类型为 __sighandler_t, 这里通过 typedef 重新定义一下
+typedef __sighandler_t sighandler_t;
+
+// safe_call.c
+#include <wait.h>
+sighandler_t Signal(int sig_num, sighandler_t handler) {
+    sighandler_t pre = signal(sig_num, handler);
+    if (pre == SIG_ERR) {
+        printf("signal installing error: %d", sig_num);
+        exit(1);
+    }
+    return pre;
+}
+```
+
+因为仅仅测试能否 install signal handler，因此，这里的 main 函数仅仅是进入休眠而已
+
+```c
+#include <stdio.h>
+#include <signal.h>
+#include <unistd.h>
+#include "safe_call.h"
+
+void signal_handler(int sig_num) {
+    if (sig_num == SIGINT) printf("ctrl + c not works\n");
+}
+
+int main() {
+    sighandler_t pre = Signal(SIGINT, signal_handler);
+    while (1) pause();
+    return 0;
+}
+```
+
+注意到 pause 函数放在了 while 死循环中，这是因为，尽管 SIGINT 不会 terminate 当前进程，但 pause 函数还是会被信号打断，打断之后会退出休眠，为了防止程序收到 SIGINT，并打印输出后直接退出，这里将 pause 放在了 while 循环中
+
+处理信号的过程不一定是立刻执行完成的，可能出现当前正在 handling the signal，而再次到来其他信号的情况，此时会调用其他信号的信号处理函数
+
+<img id="handler_handler_handler" src="https://cdn.jsdelivr.net/gh/SunYuanI/img/img/handler_handler_handler.png"/>
+
+signal handler 本身可以认为是一个和应用程序独立的 logical flow，也即 **handler 和应用程序，handler 之间是并发的**
+
+### block&unblock signal
+
+linux 中阻塞信号存在 implicit 和 explicit 两种情况
+
+* implicit block：正在被 handle 的信号不会被再次接收，因为 padding vector 中对应的 bit 在 handler 返回之前一直都是 1
+* explicit block：syscall -> sigprocmask
+
+```c
+# include <signal.h>
+// 以下的这些，如果执行成功，返回 0，如果执行出错返回 -1
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigemptyset(sigset_t *set);
+int sigfillset(sigset_t *set);
+int sigaddset(sigset_t *set, int signum);
+int sigdelset(sigset_t *set, int signum);
+// 这个函数是用来查看某种信号是否属于 blocking 向量的，如果 signum 属于这个集合就返回 1，如果不属于就返回 0，如果出错返回 -1
+int sigismemeber(const sigset_t *set, int signum);
+```
+
+这些函数从名字上基本上都可以看出作用：
+
+*   sigemptyset(sigset_t *set)，会初始化一个空集
+*   sigfillset(sigset_t *set)，会初始化一个全集
+*   sigaddset(sigset_t *set, int signum)，会将信号 signum 加入对应的 set
+
+*   sigdelset(sigset_t *set, int signum)，会将信号 signum 移出对应的 set
+*   sigismemeber(const sigset_t *set, int signum)，会查看信号 signum 是否属于对应的 set
+
+这里 sigprocmask 稍微麻烦一点，它具有三个参数，第一个参数 how 决定了这个函数的行为，how 有三种取值
+
+* SIG_BLOCK，会将 set 中的信号添加到 blocked 中：blocked = oldset | set
+* SIG_UNBLOCK，会将 set 中的信号从 blocked 中移除：blocked = oldset & (~set)
+* SIG_SETMASK，会将 set 赋值给 blocked：blocked = set
+
+参数 oldset 不为 NULL 时，进行 sigprocmask 之前被 block 的信号集合会被放在参数 oldset 中
+
+一般，我们使用的阻塞某种信号具有如下套路：
+
+```c
+sigset_t mask, prev_mask;
+// 初始化一个空集合
+sigemptyset(&mask);
+// 这里可以有很多行，就是把需要阻塞的信号加入集合
+sigaddset(&mask, [signum]);
+// 阻塞信号
+sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+
+/* 这里执行需要阻塞信号后才能进行的操作 */
+
+// 恢复现场
+sigprocmask(SIG_SETMASK, &prev_mask, NULL);
+```
+
+### 稳定的 signal handler
+
+signal handler 并没有那么容易写，因为其本身和主程序之间属于并发关系，共享了全局变量，可能出现 race，此外不同版本的 linux 本身对待信号可能存在语义差异，如何提高代码的可移植性也是一个问题
+
+#### safe signal handling
+
+handler 和 main 函数，handler 之间都是<a href="#handler_handler_handler">并发</a>的关系，因此当其试图访问全局变量时很有可能出现 race, 并发的问题是很难调试的，因为程序并不会以特定的顺序执行，存在一定的偶然性，编写安全的 handler 需要遵循几个原则：
+
+*   handler 越简单越好：比如设置一个全局变量然后就返回
+
+*   handler 中只调用 async-signal-safe (异步信号安全)的函数：所谓 async-signal-safe，指的是那些 reentrant(可重入) 的和不会被 handler 打断的函数
+
+    >   async-signal-safe 的函数不会访问全局变量，所有的变量都保存在 local stack 中，因此安全
+    >
+    >   这种函数是 reentrant 的，也是因为多次调用这种函数，使用的变量都是相互独立的
+
+    linux 中并不是所有所有的 syscall 都是线程安全的：
+
+    ![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/async_signal_safe_functions.png)
+
+    仅仅使用 write 输出还是太麻烦了，csapp 这里提供了 SIO(safe I/O) 包，其实 csapp 所有的包，都放在了 csapp.c 中，这里造轮子了...
+
+    ```c
+    // safe_call.c
+    
+    #include <unistd.h>
+    #include <sys/types.h>
+    
+    size_t sio_strlen(char s[]) {
+        int i = 0;
+        while (s[i] != '\0') i++;
+        return i;
+    }
+    
+    void sio_reverse(char s[], int begin, int end) {
+        int i, j;
+        for (i = begin, j = end; i < j; i++, j--) {
+            char tmp = s[i];
+            s[i] = s[j];
+            s[j] = tmp;
+        }
+    }
+    
+    // convert long to base b string
+    // @return string length
+    int sio_ltoa(long v, char s[], int b) {
+        int is_neg = v < 0 ? 1 : 0;
+        int i = 0;
+        if (is_neg) v = -v;
+        while (v != 0) {
+            s[i++] = v % b + '0';
+            v /= b;
+        }
+        if (is_neg) s[i++] = '-';
+        s[i] = '\0';
+        sio_reverse(s, 0, i - 1);
+        return i;
+    }
+    
+    ssize_t sio_puts(char s[]) {
+        write(STDOUT_FILENO, s, sio_strlen(s));
+    }
+    
+    ssize_t sio_putl(long v) {
+        char s[25];
+        int len = sio_ltoa(v, s, 10);
+        write(STDOUT_FILENO, s, len);
+    }
+    
+    ssize_t sio_error(char s[]) {
+        write(STDERR_FILENO, s, sio_strlen(s));
+    }
+    ```
+
+*   函数开始前保存 errno；函数结束前恢复 errno：因为在信号处理函数中进行系统调用会如果出现异常，会覆盖掉原来的 error，所以进入信号处理函数后，需要先进行 errno 的保存，而在离开前进行恢复
+
+*   访问全局数据时，阻塞所有的信号：如果主程序和 handler 之间共享了全局变量，那么针对全局变量的读、写之前需要阻塞所有的信号；这是因为对于一个数据结构的读写可能涉及到多个指令，如果不阻塞信号，那么可能出现主程序修改变量一半时，被 handler 打断，随后 handler 读取到的变量不是最新的，数据是不一致的
+
+* 使用 volatile 声明全局变量：和 java 类似 volatile 的作用是为了保证每次都是从内存中获取到全局变量，防止 gcc 把变量缓存到寄存器中
+
+    >   如果 main 只会不断地读取全局变量，而 handler 才会写全局变量，那么在 complier 看来，main 不过是重复读取一个变量而已，可能会把变量放在寄存器中缓存起来了，这样 main 就不能读取到 handler 更新的值了 
+
+* 使用 volatile sig_atomic_t 声明 flag：有的时候需要设置全局变量 flag 标志状态，使用 volatile sig_atomic_t 可以保证 flag 的读写操作都是原子的，即单次的读，单次的写都是原子的。但要注意的是类似 flag++ 这种操作，它涉及到一次读和一次写，并不是原子的
+
+  >   sig_atomic_t 本质上还是整数，只不过保证了变量读写的原子性
+
+  **如果全局变量只是 flag，那么通过 volatile sig_atomic_t 声明即可，不再需要阻塞信号了**
+
+#### correct signal handling
+
+收到信号，表明至少发生了一次事件，而不是事件发生了一次，因此对于信号处理，需要特别注意，不能假定信号的个数
+
+考虑一个父进程回收子进程的例子：
+
+```c
+#include <stdio.h>
+#include <signal.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/types.h>
+#include "safe_call.h"
+
+void signal_handler(int sig_num) {
+    int old_errorno = errno;
+    if (sig_num == SIGCHLD) {
+        pid_t pid = Waitpid(-1, NULL, 0);
+        sio_puts("parent reap child: ");
+        sio_putl(pid);
+        sio_puts("\n");
+    }
+    errno = old_errorno;
+}
+
+int main() {
+    sighandler_t pre = Signal(SIGCHLD, signal_handler);
+    int i;
+    for (i = 0; i < 10; i++) {
+        if (Fork() == 0) {
+            sleep(1);
+            _exit(0);
+        }
+    }
+    while (1) pause();
+    return 0;
+}
+```
+
+首先 install SIGCHLD 的 handler，在 handler 中回收子进程，所有的子进程仅休眠了 1s 后，就退出了，父进程会在一个 while 循环中持续 pause，等待接收 SIGCHLD 信息，但这个程序存在一个问题，看输出结果就知道了
+
+```shell
+$ gcc -o test test.c ./safe_call.so
+$ ./test
+parent reap child: 1050
+parent reap child: 1051
+parent reap child: 1052
+parent reap child: 1053
+parent reap child: 1054
+parent reap child: 1055
+
+
+```
+
+显然 10 个子进程，并没有全部回收完成，这个其实就对应了前面的问题，用信号计数了
+
+因此正确的写法是在收到 SIGCHILD 后持续调用 waitpid 回收子进程，直到所有已经 terminate 的子进程都已经被回收完毕
+
+```c
+void signal_handler_t(int sig_num) {
+    int old_errorno = errno;
+    if (sig_num == SIGCHLD) {
+        pid_t pid;
+        while (1) {
+            pid_t pid = waitpid(-1, NULL, WNOHANG);
+            if (pid < 0) {
+                if (errno != ECHILD) {
+                    sio_error("wait pid error\n");
+                    _exit(1);
+                }
+                break;
+            }
+            if (pid == 0) {
+                sio_puts("reap done\n");
+                break;
+            }
+            sio_puts("parent reap child: ");
+            sio_putl(pid);
+            sio_puts("\n");
+        }
+        
+    }
+    errno = old_errorno;
+}
+```
+
+注意到这里使用 waitpid 回收子进程，其中 options 取值为 WNOHANG，而不是 0，这样父进程不会一直阻塞等待子进程结束，要注意当 waitpid 返回 -1 时还有可能是所有子进程都已经结束了，此时 errno 会被设置为 ECHILD，此时的错误并不是 wait 的错误
+
+>   关于 waitpid syscall，具体的可以看[回收子进程](#回收子进程)
+
+```shell
+$ gcc -o test test.c ./safe_call.so
+$ ./test
+parent reap child: 1474
+parent reap child: 1475
+parent reap child: 1476
+parent reap child: 1477
+parent reap child: 1478
+parent reap child: 1479
+reap done
+parent reap child: 1480
+reap done
+parent reap child: 1481
+reap done
+parent reap child: 1483
+parent reap child: 1482
+
+```
+
+可以看到此时所有的子进程都会被正确回收
+
+#### portable signal handling
+
+>   使得信号处理函数具有可移植性
+
+不同版本的 Unix 系统有不同的信号处理语义
+
+* signal 函数语义不同：有的系统在捕获信号后就将 handler 恢复为默认值；对于这类系统，需要在 handler 的结尾手动再 install 一下 handler
+
+* 有一些系统调用比如：read 其过程比较长，称为 slow system call。如果在 read 的时候，接收到信号，那么 read 会被中断，直接返回错误，此时 errno 会被设置为 EINTR
+
+  > 所以需要在一个循环里进行这些调用，直到成功
+  
+* 一些版本的 linux 中不会 block 掉正在接收处理的信号
+
+为了代码的可移植性，可以通过 sigaction 明确 signal 的处理语义
+
+```c
+#include <signal.h>
+// 如果调用成功返回 0，如果调用失败返回 -1
+int sigaction(int signum, struct sigaction *act, struct sigaction* oldact);
+```
+
+而实际中用户并不会直接使用这个函数，因为参数太复杂了，以一个结构体为参数表明信号的处理逻辑实在有点麻烦了，实际使用的是其包装函数 Signal
+
+```c
+handler_t* Signal(int signum, handler_t* handler) {
+    struct sigaction action, old_action;
+    action.sa_handler = handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    
+    if (sigaction(signum, &action, &old_action) < 0) unix_error("Signal error");
+    
+    return old_action.sa_handler;
+}
+```
+
+>   从名称上，Signal 函数和 signal 函数具有相同的含义，即 installing signal handler，只不过使用 sigaction 作为深层调用时，可以明确 signal 的语义，增强代码的可移植性
+
+通过 Signal 函数设置的 handler 具有几种特性：
+
+*   当执行某个 signal 的 handler 时，对应的 signal 会被 block
+*   信号不排队(还是通过 bit mode 实现的信号)
+*   被中断的 syscall 会自动重启(比如上面的 read 不再需要放在 while 循环中了)
+*   handler 不会再调用后重置，即一次 install 终生使用
+
+#### 避免竞争
+
+有的时候并发真的会出问题，考虑一个 shell 的程序，其中 foreground job 任意时刻只有一个，而 background job 可以有很多个，为了方便管理，这里使用列表统一管理，每次会从 shell 的 job list 中通过 add_job 添加一个 background job，而当子进程结束后，通过 SIGCHLD 告知父进程，此时进程已经结束，进而父进程会在 SIGCHLD 的 handler 中删除对应的 job
+
+>   这里为了方便统一使用 csapp.h
+
+```c
+#include "csapp.h"
+
+void handler(int signum) {
+    int old_errno = errno;
+    sigset_t mask, prev;
+    pid_t pid;
+
+    Sigfillset(&mask);
+
+    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        delete_job(pid);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+    }
+    if (pid < 0 && errno != ECHILD) Sio_error("waitpid error");
+
+    errno = old_errno;
+}
+
+int main(int argc, char* argv[]) {
+    pid_t pid;
+    sigset_t mask, prev;
+
+    Sigfillset(&mask);
+    Signal(SIGCHLD, handler);
+    init_job();
+
+    while (1) {
+        if ((pid = Fork()) == 0) {
+            Execve("/bin/date", argv, NULL);
+        }
+
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        add_job(pid);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+    }
+
+    return 0;
+}
+```
+
+>   这里并不关系具体的 init_job, add_job, delete_job 的实现
+
+因为主程序和 handler 都需要访问全局的 joblist，因此在访问之前通过 Sigprocmask 屏蔽了所有信号，尽管如此，当前程序还是存在一些问题
+
+考虑一个场景，子进程创建之后，一直运行结束，父进程才得到控制：子进程会直接向父进程发送 SIGCHLD 表示当前进程已经结束, 从而在执行父进程代码之前会先调用 handler，即**在父进程 add_job 之前调用了一次 delete_job**；这可能不是什么大问题，但随后执行父进程代码逻辑，父进程 add_job, 即**父进程添加了一个已经结束的 job**
+
+尽管通过 while(waitpid()) 可以保证回收所有的后台进程，但显然此时 joblist 的内容可能存在问题，即 joblist 中可能存在已经结束的进程
+
+出现上述问题的关键在于父进程在子进程结束后才执行，导致进程先被 delete 后才被 add，一种解决方式是**在父进程 Fork 子进程之前就 block 掉 SIGCHLD**，这样即便子进程提前结束，SIGCHLD 也不会被父进程接收(handler 不会被调用)，直到父进程 add_job 后，父进程才会接收 SIGCHLD
+
+```c
+#include "csapp.h"
+// handler 一点都不需要改变
+void handler(int signum) {
+    int old_errno = errno;
+    sigset_t mask, prev;
+    pid_t pid;
+
+    Sigfillset(&mask);
+
+    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        delete_job(pid);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+    }
+    if (pid < 0 && errno != ECHILD) Sio_error("waitpid error");
+
+    errno = old_errno;
+}
+
+int main(int argc, char* argv[]) {
+    pid_t pid;
+    sigset_t mask, prev, block_chld;
+
+    Sigfillset(&mask);
+    Signal(SIGCHLD, handler);
+    init_job();
+    
+    // 构造一个仅 block SIGCHLD 的集合
+    Sigemptyset(&block_chld);
+    Sigaddset(&block_chld, SIGCHLD);
+
+    while (1) {
+        // fork 前 block SIGCHLD
+        Sigprocmask(SIG_BLOCK, &block_chld, &prev);
+        if ((pid = Fork()) == 0) {
+            // 这里在 Execve 之前先恢复集合，因为 blocking 向量具有继承特性
+            // 为了避免的子进程也 block 掉 SIGCHLD, 这里需要让子进程恢复
+            Sigprocmask(SIG_SETMASK, &prev, NULL);
+            Execve("/bin/date", argv, NULL);
+        }
+
+        Sigprocmask(SIG_BLOCK, &mask, NULL);
+        add_job(pid);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        // 只有在这里父进程才有可能接收到信号 SIGCHLD，从而 delete 对应的 job
+    }
+
+    return 0;
+}
+```
+
+#### 主动等待
+
+对于一个 shell 来说，当创建一个前台程序的时候，shell 需要暂时进入阻塞状态，等待前台程序运行完成，当前台进程结束时，会向 shell 发送 SIGCHLD，父进程通过 handler 处理回收子进程
+
+```c
+#include "csapp.h"
+// 全局的 flag, 因为使用 volatile sig_automic 声明，因此单次访问这个变量不需要屏蔽信号
+volatile sig_atomic_t pid;
+
+void handler(int signum) {
+    int old_errno = errno;
+    pid = waitpid(-1, NULL, 0);
+    if (pid < 0 && errno != ECHILD) Sio_error("waitpid error");
+    errno = old_errno;
+}
+
+int main(int argc, char* argv[]) {
+    pid_t pid;
+    sigset_t block_chld, prev;
+
+    Signal(SIGCHLD, handler);
+    
+    // 构造一个仅 block SIGCHLD 的集合
+    Sigemptyset(&block_chld);
+    Sigaddset(&block_chld, SIGCHLD);
+
+    while (1) {
+        // fork 前 block SIGCHLD
+        Sigprocmask(SIG_BLOCK, &block_chld, &prev);
+        if ((pid = Fork()) == 0) {
+            // 这里在 Execve 之前先恢复集合，因为 blocking 向量具有继承特性
+            // 为了避免的子进程也 block 掉 SIGCHLD, 这里需要让子进程恢复
+            Sigprocmask(SIG_SETMASK, &prev, NULL);
+            Execve("/bin/date", argv, NULL);
+        }
+		// 父进程先给 pid 置为 0 表示前台进程尚未结束
+        pid = 0;
+        // 父进程解除 SIGCHLD 限制
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+		// 父进程 spin，等待子进程结束
+        while (!pid) ;
+
+        // 其他的操作
+    }
+    return 0;
+}
+```
+
+这种 spin 确实可以实现需求，且没有 bug
+
+>   Fork 之前屏蔽了 SIGCHLD, 这样父进程一定是第一个访问全局变量 pid 的, 避免出现上面的问题
+
+但这个程序效率太低了，在子进程结束之前父进程会一直 spin，太浪费了，此时最好的做法是让父进程休眠，收到 SIGCHLD 后在醒来，即修改为：
+
+```c
+while (!pid) pause();
+```
+
+看起来这个还不错，问题在于，这次的循环有两个操作：
+
+* 查询全局变量
+* 线程休眠
+
+考虑这样一种情况：如果父进程查询完全局变量，发现 pid 为 0 ，然后失去控制权，随后子进程一直运行结束，并向父进程发出信号 SIGCHLD，父进程通过 handler 修改 pid，随后父进程才运行到 pause，此时 父进程会直接进入休眠
+
+另外一种修改方式为：
+
+```c
+while (!pid) sleep(1);
+```
+
+试图通过设置定时休眠，避免重复查询造成的影响，但 sleep 参数的选取是比较讲究的；如果参数太小，那么父进程将经常醒来，从而 spin，效率太低；而如果参数太大，那么可能父进程刚刚休眠，子进程就结束了，这样父进程对于子进程结束的信息会变得很不敏感
+
+好在 linux 提供了一种 syscall，可以用来解决这个问题
+
+```c
+#include <signal.h>
+// 一直返回 -1
+int sigsuspend(const sigset_t* mask);
+```
+
+sigsuspend 会暂时使用 mask 集合替换目前的阻塞集合，并挂起该进程，直到收到一个信号，从逻辑上等价于：
+
+```c
+sigprocmask(SIG_BLOCK, &mask, &prev);
+pause();
+sigpromask(SIG_SETMASK, &prev, NULL);
+```
+
+不过对于 sigsuspend 而言，第一个 sigprocmask 和第二个 pause 之间是原子的，不会被 handler 打断
+
+```c
+#include "csapp.h"
+
+volatile sig_atomic_t pid;
+
+void handler(int signum) {
+    int old_errno = errno;
+    pid = waitpid(-1, NULL, 0);
+    if (pid < 0 && errno != ECHILD) Sio_error("waitpid error");
+    errno = old_errno;
+}
+
+int main(int argc, char* argv[]) {
+    sigset_t block_chld, prev, mask;
+
+    Signal(SIGCHLD, handler);
+    
+    // 构造一个仅 block SIGCHLD 的集合
+    Sigemptyset(&block_chld);
+    Sigaddset(&block_chld, SIGCHLD);
+    
+    Sigemptyset(&mask);
+
+    while (1) {
+        // fork 前 block SIGCHLD
+        Sigprocmask(SIG_BLOCK, &block_chld, &prev);
+        if ((pid = Fork()) == 0) {
+            // 这里在 Execve 之前先恢复集合，因为 blocking 向量具有继承特性
+            // 为了避免的子进程也 block 掉 SIGCHLD, 这里需要让子进程恢复
+            Sigprocmask(SIG_SETMASK, &prev, NULL);
+            Execve("/bin/date", argv, NULL);
+        }
+
+        pid = 0;
+        // 临时 unblock SIGCHLD 信号
+        while (!pid) sigsuspend(&prev);
+
+        // 彻底 unblock SIGCHLD 
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        // 其他的操作
+    }
+    return 0;
+}
+```
+
+这里的关键是父进程每次会临时 unblock SIGCHLD，然后进入 pause(), 因为 unblock 和 pause 之间是原子的，保证了不会在 unblock 之后 pause 之前调用 handler
+
+## shell lab
+
+### 准备工作
+
+相比于其他的 lab，这个 lab 还是比较好做的，毕竟在 csapp 原书中已经给出了一版基本的 shell，此外后面讲到 race 的时候也是以 shell 程序为例的，这些在这个 lab 中都有用到，这个 lab 想要比较顺利的做出来，还是需要好好看书的
+
+整个 lab 就是完成对几个函数的补充，具体的为：
+
+*   eval: 整个 shell 的基础，因为 cmdline 的字符串解析工作已经给出了，因此这个函数重点需要执行对应的命令，具体的就是区分内置命令还是其他命令，前台任务还是后台任务
+*   buildin_cmd: 用来判断当前输入是否为内置命令
+*   do_bgfg: 内置命令 bg 和 fg 的实现函数，bg 要求以后台任务的形式启用已经 stopped 的任务，fg 要求以前台任务的形式启用已经 stopped 的任务，此外对于那些后台任务，当使用 fg 时需要让其进入前台
+*   waitfg: shell 调用这个函数后会主动等待前台任务的完成
+*   sigchld_handler: SIGCHLD 的 handler，这个是重头戏，因为需要回收的不仅仅有前台任务，还有后台任务，此外如果希望处理好 trace16.txt 中的情况，还需要让这个 handler 可以处理 stopped 的任务
+*   sigint_handler: SIGINT 的 handler
+*   sigtstp_handler: SIGTSTP 的 handler
+
+官方建议对照着 trace 文件从头向后做，作为对比，官方提供了 ./tshref 作为参考，编写 tsh.c 最终需要实现和 ./tshref 一样的效果
+
+trace 对应了在 shell 中的一组输入，最开始可能看不懂，其实还是很好理解的，所有 trace 文件中调用的 /bin/echo 仅仅是为了打印输出而已，和 shell 程序本身并没有什么关系，这个 shell 执行的所有测试程序都已经在 tar 包中提供了，都是定时程序，需要一个整数参数
+
+*   ./myspin: 一个休眠程序，参数表示休眠时间
+*   ./mysplit: 一个会 fork 子进程的程序，参数 t 表示 t 秒后进行 fork
+*   ./myint: 参数 t 表示 t 秒后会向自己发送 SIGINT
+*   ./mystop: 参数 t 表示 t 秒后会向自己所在的进程组发送 SIGTSTP
+
+显然 trace 文件不是用来看的，里面的一组命令也不需要手动进入 shell 中调试，官方提供了一个驱动文件 sdriver.pl 这个文件可以用来在 shell 中执行 trace 文件对应的指令，官方的 makefile 写的很好，已经可以驱动这个 sdriver.pl 了，每次通过 make 指令测试即可
+
+```shell
+# 首先通过 make 生成 ./tsh
+# 每次修改 tsh.c 之后最好 make clean 后再 make(尽管 make 是增量编译)
+$ make
+# test15 表示使用 ./tsh 执行 trace15.txt 的指令
+$ make test15
+# rtest15 表示使用 ./tshref 执行 trace15.txt 的指令
+$ make rtest15
+```
+
+trace15.txt 基本上已经涵盖了之前所有的内容，而 trace16.txt 更是重量级，这个脚本会分别调用 ./mystop 和 ./myint 来查看 shell 应对来自非键盘输入而产生的 SIGTSTP 和 SIGINT 的响应
+
+>   如果希望完成 trace16.txt 就需要对原先的 sigchld_handler 进行一定的修改
+
+### 简单的工作
+
+首先选择向 eval 动刀，毕竟之前已经做过一个简单的 shell，基本的框架应该是知道的，首先进行解析，然后判断是是否为内置命令，如果不是的话，就 fork 一个子进程
+
+```c
+void eval(char *cmdline)
+{
+    char* argv[MAXARGS];
+    // 这里修改了 parseline，让其在遇到空行(argc = 0)的时候直接返回负数
+    int bg = parseline(cmdline, argv);
+    // ignore empty lines
+    if (bg < 0) return;
+
+    if (!builtin_cmd(argv)) {
+        // fork 子进程
+    }
+    return;
+}
+```
+
+因为 shell lab 中使用 joblist 的方式记录前台任务和后台任务，这里就需要考虑到之前在 csapp 在本章最后一部分讲的关于[race](#避免竞争)的内容，简单来说，就是在 fork 子进程之前就需要 block 掉 SIGCHLD, 只有这样才能保证 joblist 中任务可以被正常添加
+
+```c
+// eval
+/* 若干其他代码 */
+if (!builtin_cmd(argv)) {
+    sigset_t block_child, prev, mask;
+    pid_t pid;
+    int state = bg ? BG : FG;
+
+    Sigemptyset(&block_child);
+    Sigaddset(&block_child, SIGCHLD);
+    Sigfillset(&mask);
+    // block SIGCHLD before fork
+    Sigprocmask(SIG_BLOCK, &block_child, &prev);
+    if ((pid = Fork()) == 0) {
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        /*
+             * modify child process group id
+             * after this modification, child process group id is identical to its process id
+             */
+        Setpgid(0, 0);
+        if (execve(argv[0], argv, environ) < 0) {
+            // execve error
+            Sigprocmask(SIG_SETMASK, &block_child, NULL);
+            printf("%s: Command not found\n", argv[0]);
+            Sigprocmask(SIG_SETMASK, &prev, NULL);
+            exit(0);
+        }
+    }
+
+    Sigprocmask(SIG_BLOCK, &mask, NULL);
+    addjob(jobs, pid, state, cmdline);
+    Sigprocmask(SIG_SETMASK, &prev, NULL);
+}
+```
+
+注意到在向 joblist 中添加任务的时候，block 掉了所有的信号，这是因为 joblist 是一个全局变量，后面所有针对 joblist 的读写操作之前都 block 掉了所有的信号，保证在本次读(写)的时候 joblist 是不变的
+
+但这里并没有区分前台任务和后台任务，如果是前台任务的话，需要 shell 主动等待任务的完成，并在 sigchld_handler 中完成回收，根据原书中最后一部分介绍的[主动等待](#主动等待)部分的内容，可知这里关键在于使用 sigsuspend 保证原子性
+
+```c
+// 定义了全局变量 fg_flag，fg_flag 中保存的是前台任务的 pid
+volatile sig_atomic_t fg_flag;
+
+void eval(char *cmdline)
+{
+    char* argv[MAXARGS];
+    int bg = parseline(cmdline, argv);
+    // ignore empty lines
+    if (bg < 0) return;
+
+    if (!builtin_cmd(argv)) {
+        sigset_t block_child, prev, mask;
+        pid_t pid;
+        int state = bg ? BG : FG;
+
+        Sigemptyset(&block_child);
+        Sigaddset(&block_child, SIGCHLD);
+        Sigfillset(&mask);
+        // block SIGCHLD before fork
+        Sigprocmask(SIG_BLOCK, &block_child, &prev);
+        if ((pid = Fork()) == 0) {
+            Sigprocmask(SIG_SETMASK, &prev, NULL);
+            /*
+             * modify child process group id
+             * after this modification, child process group id is identical to its process id
+             */
+            // 这里存粹是为了方便管理进程，强制让子进程的 group id 和 pid 相同
+            Setpgid(0, 0);
+            if (execve(argv[0], argv, environ) < 0) {
+                // execve error
+                Sigprocmask(SIG_SETMASK, &block_child, NULL);
+                printf("%s: Command not found\n", argv[0]);
+                Sigprocmask(SIG_SETMASK, &prev, NULL);
+                exit(0);
+            }
+        }
+		
+        Sigprocmask(SIG_BLOCK, &mask, NULL);
+        addjob(jobs, pid, state, cmdline);
+		// 注意 printf 的时候也一定要保证信号都被 block 掉了
+        // 否则如果 printf 被打断，而 handler 中也有 printf 语句的话 printf 就是不安全的
+        if (bg) printf("[%d] (%d) %s", getjobpid(jobs, pid)->jid, pid, cmdline);
+        else {
+            // 在进入等待之前需要 block 掉 SIGCHLD，而恢复 SIGINT 和 SIGTSTP，保证 shell 阻塞等待 foreground job 的时候可以被打断
+            Sigprocmask(SIG_SETMASK, &block_child, NULL);
+            waitfg(pid);
+        }
+
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+    }
+
+    return;
+}
+
+void waitfg(pid_t pid)
+{
+    fg_flag = pid;
+    sigset_t mask;
+    sigemptyset(&mask);
+    // 关键在于 sigsuspend 临时 unblock 了 SIGCHLD
+    while (fg_flag) sigsuspend(&mask);
+    return;
+}
+
+void sigchld_handler(int sig)
+{
+    if (sig == SIGCHLD) {
+        int old_errno = errno;
+        sigset_t mask, prev;
+        sigfillset(&mask);
+        pid_t pid;
+        // 使用 option 为 WNOHANG，保证 shell 可以正常 reap 所有 terminated 的进程且不会被阻塞
+        while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+            if (pid == fg_flag) fg_flag = 0;
+            sigprocmask(SIG_BLOCK, &mask, &prev);
+            deletejob(jobs, pid);
+            sigprocmask(SIG_SETMASK, &prev, NULL);
+        }
+        // 当 pid 为负数时，不一定出现问题，还可能是所有的子进程都已经别回收了，即 errno 被赋值为 ECHILD
+        if (pid < 0 && errno != ECHILD) unix_error("wait pid error");
+        errno = old_errno;
+    }
+    return;
+}
+```
+
+以上部分，基本上都是来自于 csapp 中提供的基本 shell 和后面的一些例子，写好这些，其实前台任务和后台任务就已经写好了
+
+### 支持内置命令
+
+shell lab 需要支持的命令：
+
+*   quit: 表示当前 shell 退出
+*   jobs: 打印当前所有的任务(显然是不包含前台任务的)
+*   bg: 以后台任务的形式启用已经 stopped 的任务
+*   fg: 以前台任务的形式启用已经 stopped 的任务或让某个后台任务运行到前台
+
+因为 lab 已经提供了接口 buildin_cmd，在这个方法实现中只需要通过字符串比较判断 argv\[0] 和上面四个命令名字的关系即可
+
+>   因为 argv[0] 中保存的是命令的名称，也是一种习惯吧
+
+```c
+int builtin_cmd(char **argv)
+{	
+    if (!strcmp(argv[0], "quit")) {
+        // shell 退出之后，要保证其所有子进程需要 terminated，这样就算 shell 来不及 reap 子进程，init 也会 reap 子进程
+        // shell should send SIGINT to all its children process
+        int i;
+        for (i = 0; i < MAXJOBS; i++) {
+            /* send SIGINT */
+            if (jobs[i].pid) Kill(-jobs[i].pid, SIGINT);
+        }
+        exit(0);
+    } else if (!strcmp(argv[0], "jobs")) {
+        // lab 提供了方法 listjobs 打印所有任务
+        // 因为需要访问全局变量 jobs，所以还是需要 block 信号
+        sigset_t mask, prev;
+        Sigfillset(&mask);
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        listjobs(jobs);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        return 1;
+    } else if (!strcmp(argv[0], "bg") || !strcmp(argv[0], "fg")) {
+      	// 因为提供了接口 do_bgfg 因此这里先不处理命令 bg 和 fg，调用接口即可
+       	do_bgfg(argv);
+       	return 1;
+    }
+    return 0;     /* not a builtin command */
+}
+```
+
+现在关键变为了支持 bg 和 fg, 其实实现起来也是不困难的，首先根据 pid(jid) 找到对应 job，然后如果是 stopped 的进程，那么需要向其发送 SIGCONT 使其运行起来
+
+如果是 fg 的话需要让 shell 阻塞等待对应进程结束
+
+```c
+void do_bgfg(char **argv)
+{
+    struct job_t* job;
+    pid_t pid;
+    // 一些异常处理，保证最后找到的 job 不是 NULL
+    if (argv[1] == NULL) {
+        printf("%s command requires PID or %%jobid argument\n", argv[0]);
+        return;
+    }
+    if (argv[1][0] == '%') {
+        int jid = atoi(argv[1] + 1);
+        if (jid == 0) {
+            printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+            return;
+        }
+        job = getjobjid(jobs, jid);
+        if (job == NULL) {
+            printf("%%%d: No such job\n", jid);
+            return;
+        }
+    } else {
+        pid = atoi(argv[1]);
+        if (pid == 0) {
+            printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+            return;
+        }
+        job = getjobpid(jobs, pid);
+        if (job == NULL) {
+            printf("(%d): No such process\n", pid);
+            return;
+        }
+    }
+    
+    // 输入参数为 pid 还是 jid 其实不关键，关键的在于找到对应的 job 和其对应的 pid
+    pid = job->pid;
+	
+    sigset_t mask, prev;
+    Sigemptyset(&mask);
+    Sigaddset(&mask, SIGCHLD);
+    Sigprocmask(SIG_BLOCK, &mask, &prev);
+    // 如果是 stopped 的进程需要发送 SIGCONT 使其运行起来
+    if (job->state == ST) Kill(-pid, SIGCONT);
+    
+	// 修改进程状态
+    // handle stopped process and bring bg process to fg
+    if (!strcmp(argv[0], "fg")) {
+        job->state = FG;
+        printf("[%d] (%d) Running %s", job->jid, job->pid, job->cmdline);
+        waitfg(pid);
+    } else {
+        job->state = BG;
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    }
+    Sigprocmask(SIG_SETMASK, &prev, NULL);
+
+    return;
+}
+```
+
+### 完成 handler
+
+其实现在就剩下最后两个 handler 没写了，分别对应了 SIGINT 和 SIGTSTP，这两个 handler 也是类似的，当 shell 收到了对应的信号需要向前台进程发送对应信号，这两个 handler 是类似的
+
+```c
+void sigint_handler(int sig)
+{
+    if (sig == SIGINT) {
+        int old_errno = errno;
+        sigset_t mask, prev;
+        Sigfillset(&mask);
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        if (fg_flag > 0) {
+            printf("Job [%d] (%d) terminated by signal 2\n", pid2jid(pid), pid);
+            Kill(-fg_flag, SIGINT);
+        }
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        errno = old_errno;
+    }
+    return;
+}
+
+void sigtstp_handler(int sig)
+{
+    if (sig == SIGTSTP) {
+        int old_errno = errno;
+        // 和上面的最大的区别在于这里还需要修改 job 的状态
+        sigset_t mask, prev;
+        Sigfillset(&mask);
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        if (fg_flag > 0) {
+            struct job_t* job = getjobpid(jobs, pid);
+            job->status = ST;
+            printf("Job [%d] (%d) stopped by signal 20\n", pid2jid(pid), pid);
+            Kill(-fg_flag, SIGTSTP);
+        }
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        errno = old_errno;
+    }
+    return;
+}
+```
+
+### 完善一下
+
+其实上面的部分已经可以保证前 15 个 trace 可以过了，最终的 trace16.txt 会向自己发送 SIGINT 和 SIGTSTP, 为了因为 shell 和前台任务和后台任务不在一个进程组中，因此上面的代码是不能处理这种情况的
+
+这里关键在于修改 SIGCHLD handler，在 SIGCHLD 中会通过 waitpid 等待子进程，上面的 option 为 WNOHANG，现在将 option 修改为 WNOHANG | WUNTRACED 这样 waitpid 就可以同时处理 stopped 和 terminated 的进程，且不会进入阻塞状态
+
+```c
+void sigchld_handler(int sig)
+{
+    if (sig == SIGCHLD) {
+        int old_errno = errno;
+        sigset_t mask, prev;
+        sigfillset(&mask);
+        pid_t pid;
+        int status;
+        while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+            if (pid == fg_flag) fg_flag = 0;
+            sigprocmask(SIG_BLOCK, &mask, &prev);
+            // 判断是否子进程是因为收到了 SIGTSTP 而进入 stopped 状态 
+            if (WIFSTOPPED(status) && WSTOPSIG(status) == 20) {
+                struct job_t* st_job = getjobpid(jobs, pid);
+                st_job->state = ST;
+                printf("Job [%d] (%d) stopped by signal 20\n", pid2jid(pid), pid);
+            }
+            // 其他情况下子进程为 terminated 的，要么是因为收到了 SIGINT 要么是因为运行结束了
+            // 总之这种情况下，需要 delete job
+            else {
+                if (WIFSIGNALED(status) && WTERMSIG(status) == 2) printf("Job [%d] (%d) terminated by signal 2\n", pid2jid(pid), pid);
+                deletejob(jobs, pid);
+            }
+            sigprocmask(SIG_SETMASK, &prev, NULL);
+        }
+        if (pid < 0 && errno != ECHILD) unix_error("wait pid error");
+        errno = old_errno;
+    }
+    return;
+}
+
+void sigint_handler(int sig)
+{
+    if (sig == SIGINT) {
+        int old_errno = errno;
+        sigset_t mask, prev;
+        Sigfillset(&mask);
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        if (fg_flag > 0) Kill(-fg_flag, SIGINT);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        errno = old_errno;
+    }
+    return;
+}
+
+void sigtstp_handler(int sig)
+{
+    if (sig == SIGTSTP) {
+        int old_errno = errno;
+        sigset_t mask, prev;
+        Sigfillset(&mask);
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        if (fg_flag > 0) Kill(-fg_flag, SIGTSTP);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        errno = old_errno;
+    }
+    return;
+}
+```
+
+注意到修改后的 sigchild_handler 还负责了 printf 和状态修改，这样 sigtstp_handler 和 sigint_handler 就可以写的比较简洁了
+
+### 省流
+
+```c
+/*
+ * tsh - A tiny shell program with job control
+ *
+ * <Put your name and login ID here>
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <ctype.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
+
+/* Misc manifest constants */
+#define MAXLINE    1024   /* max line size */
+#define MAXARGS     128   /* max args on a command line */
+#define MAXJOBS      16   /* max jobs at any point in time */
+#define MAXJID    1<<16   /* max job ID */
+
+/* Job states */
+#define UNDEF 0 /* undefined */
+#define FG 1    /* running in foreground */
+#define BG 2    /* running in background */
+#define ST 3    /* stopped */
+
+/*
+ * Jobs states: FG (foreground), BG (background), ST (stopped)
+ * Job state transitions and enabling actions:
+ *     FG -> ST  : ctrl-z
+ *     ST -> FG  : fg command
+ *     ST -> BG  : bg command
+ *     BG -> FG  : fg command
+ * At most 1 job can be in the FG state.
+ */
+
+/* Global variables */
+extern char **environ;      /* defined in libc */
+char prompt[] = "tsh> ";    /* command line prompt (DO NOT CHANGE) */
+int verbose = 0;            /* if true, print additional output */
+int nextjid = 1;            /* next job ID to allocate */
+char sbuf[MAXLINE];         /* for composing sprintf messages */
+
+struct job_t {              /* The job struct */
+    pid_t pid;              /* job PID */
+    int jid;                /* job ID [1, 2, ...] */
+    int state;              /* UNDEF, BG, FG, or ST */
+    char cmdline[MAXLINE];  /* command line */
+};
+struct job_t jobs[MAXJOBS]; /* The job list */
+volatile sig_atomic_t fg_flag;
+
+/* End global variables */
+
+
+/* Function prototypes */
+
+/* Here are the functions that you will implement */
+void eval(char *cmdline);
+int builtin_cmd(char **argv);
+void do_bgfg(char **argv);
+void waitfg(pid_t pid);
+
+void sigchld_handler(int sig);
+void sigtstp_handler(int sig);
+void sigint_handler(int sig);
+
+/* Here are helper routines that we've provided for you */
+int parseline(const char *cmdline, char **argv);
+void sigquit_handler(int sig);
+
+void clearjob(struct job_t *job);
+void initjobs(struct job_t *jobs);
+int maxjid(struct job_t *jobs);
+int addjob(struct job_t *jobs, pid_t pid, int state, char *cmdline);
+int deletejob(struct job_t *jobs, pid_t pid);
+pid_t fgpid(struct job_t *jobs);
+struct job_t *getjobpid(struct job_t *jobs, pid_t pid);
+struct job_t *getjobjid(struct job_t *jobs, int jid);
+int pid2jid(pid_t pid);
+void listjobs(struct job_t *jobs);
+
+void usage(void);
+void unix_error(char *msg);
+void app_error(char *msg);
+typedef void handler_t(int);
+handler_t *Signal(int signum, handler_t *handler);
+
+
+/*
+ * wrappers
+ */
+pid_t Fork();
+void Sigprocmask(int how, const sigset_t* set, sigset_t* oldset);
+void Sigemptyset(sigset_t* set);
+void Sigfillset(sigset_t* set);
+void Sigaddset(sigset_t* set, int signum);
+void Setpgid(pid_t pid, pid_t pgid);
+void Kill(pid_t pid, int sig);
+
+/*
+ * main - The shell's main routine
+ */
+int main(int argc, char **argv)
+{
+    char c;
+    char cmdline[MAXLINE];
+    int emit_prompt = 1; /* emit prompt (default) */
+
+    /* Redirect stderr to stdout (so that driver will get all output
+     * on the pipe connected to stdout) */
+    dup2(1, 2);
+
+    /* Parse the command line */
+    while ((c = getopt(argc, argv, "hvp")) != EOF) {
+        switch (c) {
+            case 'h':             /* print help message */
+                usage();
+                break;
+            case 'v':             /* emit additional diagnostic info */
+                verbose = 1;
+                break;
+            case 'p':             /* don't print a prompt */
+                emit_prompt = 0;  /* handy for automatic testing */
+                break;
+            default:
+                usage();
+	    }
+    }
+
+    /* Install the signal handlers */
+
+    /* These are the ones you will need to implement */
+    Signal(SIGINT,  sigint_handler);   /* ctrl-c */
+    Signal(SIGTSTP, sigtstp_handler);  /* ctrl-z */
+    Signal(SIGCHLD, sigchld_handler);  /* Terminated or stopped child */
+
+    /* This one provides a clean way to kill the shell */
+    Signal(SIGQUIT, sigquit_handler);
+
+    /* Initialize the job list */
+    initjobs(jobs);
+
+    /* Execute the shell's read/eval loop */
+    while (1) {
+
+        /* Read command line */
+        if (emit_prompt) {
+            printf("%s", prompt);
+            fflush(stdout);
+        }
+	    if ((fgets(cmdline, MAXLINE, stdin) == NULL) && ferror(stdin)) app_error("fgets error");
+
+        if (feof(stdin)) { /* End of file (ctrl-d) */
+            fflush(stdout);
+            exit(0);
+        }
+
+        /* Evaluate the command line */
+        eval(cmdline);
+        fflush(stdout);
+        fflush(stdout);
+    }
+
+    exit(0); /* control never reaches here */
+}
+
+/*
+ * eval - Evaluate the command line that the user has just typed in
+ *
+ * If the user has requested a built-in command (quit, jobs, bg or fg)
+ * then execute it immediately. Otherwise, fork a child process and
+ * run the job in the context of the child. If the job is running in
+ * the foreground, wait for it to terminate and then return.  Note:
+ * each child process must have a unique process group ID so that our
+ * background children don't receive SIGINT (SIGTSTP) from the kernel
+ * when we type ctrl-c (ctrl-z) at the keyboard.
+*/
+void eval(char *cmdline)
+{
+    char* argv[MAXARGS];
+    int bg = parseline(cmdline, argv);
+    // ignore empty lines
+    if (bg < 0) return;
+
+    if (!builtin_cmd(argv)) {
+        sigset_t block_child, prev, mask;
+        pid_t pid;
+        int state = bg ? BG : FG;
+
+        Sigemptyset(&block_child);
+        Sigaddset(&block_child, SIGCHLD);
+        Sigfillset(&mask);
+        // block SIGCHLD before fork
+        Sigprocmask(SIG_BLOCK, &block_child, &prev);
+        if ((pid = Fork()) == 0) {
+            Sigprocmask(SIG_SETMASK, &prev, NULL);
+            /*
+             * modify child process group id
+             * after this modification, child process group id is identical to its process id
+             */
+            Setpgid(0, 0);
+            if (execve(argv[0], argv, environ) < 0) {
+                // execve error
+                Sigprocmask(SIG_SETMASK, &block_child, NULL);
+                printf("%s: Command not found\n", argv[0]);
+                Sigprocmask(SIG_SETMASK, &prev, NULL);
+                exit(0);
+            }
+        }
+
+        Sigprocmask(SIG_BLOCK, &mask, NULL);
+        addjob(jobs, pid, state, cmdline);
+
+        if (bg) printf("[%d] (%d) %s", getjobpid(jobs, pid)->jid, pid, cmdline);
+        else {
+            Sigprocmask(SIG_SETMASK, &block_child, NULL);
+            waitfg(pid);
+        }
+
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+    }
+
+    return;
+}
+
+/*
+ * parseline - Parse the command line and build the argv array.
+ *
+ * Characters enclosed in single quotes are treated as a single
+ * argument.  Return true if the user has requested a BG job, false if
+ * the user has requested a FG job.
+ */
+int parseline(const char *cmdline, char **argv)
+{
+    static char array[MAXLINE]; /* holds local copy of command line */
+    char *buf = array;          /* ptr that traverses command line */
+    char *delim;                /* points to first space delimiter */
+    int argc;                   /* number of args */
+    int bg;                     /* background job? */
+
+    strcpy(buf, cmdline);
+    buf[strlen(buf)-1] = ' ';  /* replace trailing '\n' with space */
+    while (*buf && (*buf == ' ')) /* ignore leading spaces */
+	buf++;
+
+    /* Build the argv list */
+    argc = 0;
+    if (*buf == '\'') {
+	buf++;
+	delim = strchr(buf, '\'');
+    }
+    else {
+	delim = strchr(buf, ' ');
+    }
+
+    while (delim) {
+	argv[argc++] = buf;
+	*delim = '\0';
+	buf = delim + 1;
+	while (*buf && (*buf == ' ')) /* ignore spaces */
+	       buf++;
+
+	if (*buf == '\'') {
+	    buf++;
+	    delim = strchr(buf, '\'');
+	}
+	else {
+	    delim = strchr(buf, ' ');
+	}
+    }
+    argv[argc] = NULL;
+
+    /* ignore blank line */
+    if (argc == 0) return -1;
+
+    /* should the job run in the background? */
+    if ((bg = (*argv[argc-1] == '&')) != 0) argv[--argc] = NULL;
+
+    return bg;
+}
+
+/*
+ * builtin_cmd - If the user has typed a built-in command then execute
+ *    it immediately.
+ */
+int builtin_cmd(char **argv)
+{
+    if (!strcmp(argv[0], "quit")) {
+        // shell should send SIGINT to all its children process
+        int i;
+        for (i = 0; i < MAXJOBS; i++) {
+            if (jobs[i].pid) Kill(-jobs[i].pid, SIGINT);
+        }
+        /* send SIGINT */
+        exit(0);
+    } else if (!strcmp(argv[0], "jobs")) {
+        sigset_t mask, prev;
+        Sigfillset(&mask);
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        listjobs(jobs);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        return 1;
+    } else if (!strcmp(argv[0], "bg") || !strcmp(argv[0], "fg")) {
+       do_bgfg(argv);
+       return 1;
+    }
+    return 0;     /* not a builtin command */
+}
+
+/*
+ * do_bgfg - Execute the builtin bg and fg commands
+ */
+void do_bgfg(char **argv)
+{
+    struct job_t* job;
+    pid_t pid;
+    if (argv[1] == NULL) {
+        printf("%s command requires PID or %%jobid argument\n", argv[0]);
+        return;
+    }
+    if (argv[1][0] == '%') {
+        int jid = atoi(argv[1] + 1);
+        if (jid == 0) {
+            printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+            return;
+        }
+        job = getjobjid(jobs, jid);
+        if (job == NULL) {
+            printf("%%%d: No such job\n", jid);
+            return;
+        }
+    } else {
+        pid = atoi(argv[1]);
+        if (pid == 0) {
+            printf("%s: argument must be a PID or %%jobid\n", argv[0]);
+            return;
+        }
+        job = getjobpid(jobs, pid);
+        if (job == NULL) {
+            printf("(%d): No such process\n", pid);
+            return;
+        }
+    }
+    pid = job->pid;
+
+    sigset_t mask, prev;
+    Sigemptyset(&mask);
+    Sigaddset(&mask, SIGCHLD);
+    Sigprocmask(SIG_BLOCK, &mask, &prev);
+
+    if (job->state == ST) Kill(-pid, SIGCONT);
+
+    // handle stopped process and bring bg process to fg
+    if (!strcmp(argv[0], "fg")) {
+        job->state = FG;
+        printf("[%d] (%d) Running %s", job->jid, job->pid, job->cmdline);
+        waitfg(pid);
+    } else {
+        job->state = BG;
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    }
+    Sigprocmask(SIG_SETMASK, &prev, NULL);
+
+    return;
+}
+
+/*
+ * waitfg - Block until process pid is no longer the foreground process
+ */
+void waitfg(pid_t pid)
+{
+    fg_flag = pid;
+    sigset_t mask;
+    sigemptyset(&mask);
+    while (fg_flag) sigsuspend(&mask);
+    return;
+}
+
+/*****************
+ * Signal handlers
+ *****************/
+
+/*
+ * sigchld_handler - The kernel sends a SIGCHLD to the shell whenever
+ *     a child job terminates (becomes a zombie), or stops because it
+ *     received a SIGSTOP or SIGTSTP signal. The handler reaps all
+ *     available zombie children, but doesn't wait for any other
+ *     currently running children to terminate.
+ */
+void sigchld_handler(int sig)
+{
+    if (sig == SIGCHLD) {
+        int old_errno = errno;
+        sigset_t mask, prev;
+        sigfillset(&mask);
+        pid_t pid;
+        int status;
+        while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+            if (pid == fg_flag) fg_flag = 0;
+            sigprocmask(SIG_BLOCK, &mask, &prev);
+            if (WIFSTOPPED(status) && WSTOPSIG(status) == 20) {
+                struct job_t* st_job = getjobpid(jobs, pid);
+                st_job->state = ST;
+                printf("Job [%d] (%d) stopped by signal 20\n", pid2jid(pid), pid);
+            }
+            else {
+                if (WIFSIGNALED(status) && WTERMSIG(status) == 2) printf("Job [%d] (%d) terminated by signal 2\n", pid2jid(pid), pid);
+                deletejob(jobs, pid);
+            }
+            sigprocmask(SIG_SETMASK, &prev, NULL);
+        }
+        if (pid < 0 && errno != ECHILD) unix_error("wait pid error");
+        errno = old_errno;
+    }
+    return;
+}
+
+/*
+ * sigint_handler - The kernel sends a SIGINT to the shell whenver the
+ *    user types ctrl-c at the keyboard.  Catch it and send it along
+ *    to the foreground job.
+ */
+void sigint_handler(int sig)
+{
+    if (sig == SIGINT) {
+        int old_errno = errno;
+        sigset_t mask, prev;
+        Sigfillset(&mask);
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        if (fg_flag > 0) Kill(-fg_flag, SIGINT);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        errno = old_errno;
+    }
+    return;
+}
+
+/*
+ * sigtstp_handler - The kernel sends a SIGTSTP to the shell whenever
+ *     the user types ctrl-z at the keyboard. Catch it and suspend the
+ *     foreground job by sending it a SIGTSTP.
+ */
+void sigtstp_handler(int sig)
+{
+    if (sig == SIGTSTP) {
+        int old_errno = errno;
+        sigset_t mask, prev;
+        Sigfillset(&mask);
+        Sigprocmask(SIG_BLOCK, &mask, &prev);
+        if (fg_flag > 0) Kill(-fg_flag, SIGTSTP);
+        Sigprocmask(SIG_SETMASK, &prev, NULL);
+        errno = old_errno;
+    }
+    return;
+}
+
+/*********************
+ * End signal handlers
+ *********************/
+
+/***********************************************
+ * Helper routines that manipulate the job list
+ **********************************************/
+
+/* clearjob - Clear the entries in a job struct */
+void clearjob(struct job_t *job) {
+    job->pid = 0;
+    job->jid = 0;
+    job->state = UNDEF;
+    job->cmdline[0] = '\0';
+}
+
+/* initjobs - Initialize the job list */
+void initjobs(struct job_t *jobs) {
+    int i;
+
+    for (i = 0; i < MAXJOBS; i++)
+	clearjob(&jobs[i]);
+}
+
+/* maxjid - Returns largest allocated job ID */
+int maxjid(struct job_t *jobs)
+{
+    int i, max=0;
+
+    for (i = 0; i < MAXJOBS; i++)
+	if (jobs[i].jid > max)
+	    max = jobs[i].jid;
+    return max;
+}
+
+/* addjob - Add a job to the job list */
+int addjob(struct job_t *jobs, pid_t pid, int state, char *cmdline)
+{
+    int i;
+
+    if (pid < 1)
+	return 0;
+
+    for (i = 0; i < MAXJOBS; i++) {
+	    if (jobs[i].pid == 0) {
+	        jobs[i].pid = pid;
+	        jobs[i].state = state;
+	        jobs[i].jid = nextjid++;
+	        if (nextjid > MAXJOBS) nextjid = 1;
+	        strcpy(jobs[i].cmdline, cmdline);
+  	        if (verbose) {
+	            printf("Added job [%d] %d %s\n", jobs[i].jid, jobs[i].pid, jobs[i].cmdline);
+            }
+            return 1;
+	    }
+    }
+    printf("Tried to create too many jobs\n");
+    return 0;
+}
+
+/* deletejob - Delete a job whose PID=pid from the job list */
+int deletejob(struct job_t *jobs, pid_t pid)
+{
+    int i;
+
+    if (pid < 1)
+	return 0;
+
+    for (i = 0; i < MAXJOBS; i++) {
+	if (jobs[i].pid == pid) {
+	    clearjob(&jobs[i]);
+	    nextjid = maxjid(jobs)+1;
+	    return 1;
+	}
+    }
+    return 0;
+}
+
+/* fgpid - Return PID of current foreground job, 0 if no such job */
+pid_t fgpid(struct job_t *jobs) {
+    int i;
+
+    for (i = 0; i < MAXJOBS; i++)
+	if (jobs[i].state == FG)
+	    return jobs[i].pid;
+    return 0;
+}
+
+/* getjobpid  - Find a job (by PID) on the job list */
+struct job_t *getjobpid(struct job_t *jobs, pid_t pid) {
+    int i;
+
+    if (pid < 1) return NULL;
+    for (i = 0; i < MAXJOBS; i++) {
+        if (jobs[i].pid == pid) return &jobs[i];
+    }
+    return NULL;
+}
+
+/* getjobjid  - Find a job (by JID) on the job list */
+struct job_t *getjobjid(struct job_t *jobs, int jid)
+{
+    int i;
+
+    if (jid < 1) return NULL;
+    for (i = 0; i < MAXJOBS; i++) {
+        if (jobs[i].jid == jid) return &jobs[i];
+    }
+    return NULL;
+}
+
+/* pid2jid - Map process ID to job ID */
+int pid2jid(pid_t pid)
+{
+    int i;
+
+    if (pid < 1)
+	return 0;
+    for (i = 0; i < MAXJOBS; i++)
+	if (jobs[i].pid == pid) {
+            return jobs[i].jid;
+        }
+    return 0;
+}
+
+/* listjobs - Print the job list */
+void listjobs(struct job_t *jobs)
+{
+    int i;
+
+    for (i = 0; i < MAXJOBS; i++) {
+	if (jobs[i].pid != 0) {
+	    printf("[%d] (%d) ", jobs[i].jid, jobs[i].pid);
+	    switch (jobs[i].state) {
+		case BG:
+		    printf("Running ");
+		    break;
+		case FG:
+		    printf("Foreground ");
+		    break;
+		case ST:
+		    printf("Stopped ");
+		    break;
+	    default:
+		    printf("listjobs: Internal error: job[%d].state=%d ",
+			   i, jobs[i].state);
+	    }
+	    printf("%s", jobs[i].cmdline);
+	}
+    }
+}
+/******************************
+ * end job list helper routines
+ ******************************/
+
+
+/***********************
+ * Other helper routines
+ ***********************/
+
+/*
+ * usage - print a help message
+ */
+void usage(void)
+{
+    printf("Usage: shell [-hvp]\n");
+    printf("   -h   print this message\n");
+    printf("   -v   print additional diagnostic information\n");
+    printf("   -p   do not emit a command prompt\n");
+    exit(1);
+}
+
+/*
+ * unix_error - unix-style error routine
+ */
+void unix_error(char *msg)
+{
+    fprintf(stdout, "%s: %s\n", msg, strerror(errno));
+    exit(1);
+}
+
+/*
+ * app_error - application-style error routine
+ */
+void app_error(char *msg)
+{
+    fprintf(stdout, "%s\n", msg);
+    exit(1);
+}
+
+/*
+ * Signal - wrapper for the sigaction function
+ */
+handler_t *Signal(int signum, handler_t *handler)
+{
+    struct sigaction action, old_action;
+
+    action.sa_handler = handler;
+    sigemptyset(&action.sa_mask); /* block sigs of type being handled */
+    action.sa_flags = SA_RESTART; /* restart syscalls if possible */
+
+    if (sigaction(signum, &action, &old_action) < 0)
+	unix_error("Signal error");
+    return (old_action.sa_handler);
+}
+
+/*
+ * sigquit_handler - The driver program can gracefully terminate the
+ *    child shell by sending it a SIGQUIT signal.
+ */
+void sigquit_handler(int sig)
+{
+    printf("Terminating after receipt of SIGQUIT signal\n");
+    exit(1);
+}
+
+/* 下面为各种包装函数 */
+pid_t Fork() {
+    pid_t pid;
+    if ((pid = fork()) < 0) unix_error("fork error");
+    return pid;
+}
+
+void Sigprocmask(int how, const sigset_t* set, sigset_t* oldset) {
+    if (sigprocmask(how, set, oldset) < 0) unix_error("sigprocmask error");
+}
+
+void Sigemptyset(sigset_t* set) {
+    if (sigemptyset(set) < 0) unix_error("sigemptyset error");
+}
+
+void Sigfillset(sigset_t* set) {
+    if (sigfillset(set) < 0) unix_error("sigfillset error");
+}
+
+void Sigaddset(sigset_t* set, int signum) {
+    if (sigaddset(set, signum) < 0) unix_error("sigaddset error");
+}
+
+void Setpgid(pid_t pid, pid_t pgid) {
+    if (setpgid(pid, pgid) < 0) unix_error("setpgid error");
+}
+
+void Kill(pid_t pid, int signum) {
+    if (kill(pid, signum) < 0) unix_error("kill error");
+}
+```
+
+# 系统级IO
+
+## unix I/O
+
+unix 使用文件抽象所有的 io 设备，不管是磁盘的读写，shell 终端的读写，甚至对于网络的读写，在 unix 看来都是对文件的读写，这样 unix 就可以通过一种统一的方式进行 io
+
+>   对于 unix 而言，文件被看成字节序列
+>
+>   这下万事万物皆文件了
+
+unix 对文件具有以下的核心操作：
+
+*   打开文件 -> open(): 所有的应用程序会通过 syscall open() 告知内核其希望发起 IO, 内核会返回一个非负的整数，即 descriptor，这个 descriptor 对应了一个文件；内核会维护打开文件的各种信息，而对于应用程序本身而言，其通过 file descriptor 即可完成对文件的各种操作
+
+    >   所有在 linux shell 中创建的进程，都默认打开了 3 个文件 standard input(descriptor 0), standard output(descriptor 1), standard error(descriptor 2)
+    >
+    >   这三个整数被定义在了 \<unistd.h> 中，分别为 STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO
+    >
+    >   这也就是为什么之前通过 write 进行输出的时候 write(2, ) 就表示了输出，因为标识符 2 对应了标准输出
+
+*   修改当前文件的位置: 这里的文件位置并不是文件在文件系统中的路径位置，而是一个字节的偏移量；这个文件位置就是内核维护的文件的一个属性，默认的这个值为 0，通过 syscall seek() 可以修改文件位置
+
+    >   要注意的是并不是所有的文件都支持 seek 操作，比如 STDIN，这个文件不能通过 seek 修改已经输入的内容
+
+*   读写 -> read()/write(): 所谓读操作就是从文件中复制 n 个字节到内存中，如果文件位置为 k，那么一次读操作后文件中 [k, k + n] 的字节就被复制到内存中了，而文件位置也变为了 k + n；注意到如果文件大小为 m，而 k + n >= m 时，将触发 EOF, 此时应用程序将得知文件读取到结尾了；但要注意的时 EOF 并不是某个特定的字符，在 csapp 原书中，将 EOF 描述为一个 condition，当读取到文件结尾时，应用程序将感知到这个 condition
+
+    >   和读操作类似的，写操作就是将内存中的 n 字节复制到文件中，如果文件位置为 k，那么一次写操作后文件位置 k 到 k + n 的位置将被复制称内存中的 n 个字节，而在写操作后文件位置将被改变到 k + n
+
+* 关闭文件 -> close(): 当应用程序通过 syscall close() 告知内核其结束了对文件的操作，随后内核会释放掉在 open file 时创建的数据结构，并将对应的 descriptor 放回 pool of available descriptors 中；而如果应用程序在调用 close 之前就 terminated 了，内核也会释放对应 process open 的文件资源
+
+## 文件类型
+
+尽管在 unix 看来所有的文件不过是字节序列，但文件还是存在类型的区别的
+
+* regular file (普通文件)：包含了任意的数据，可能是二进制序列可能是文本，但对于 linux 而言，没有必要对其进行区分
+
+    >   在 linux 中所有的文本文件可以认为是 text line(文本行)的一个序列，一个 text line 会以 '\n' 结尾，而字符 '\n' 在 ASCII 中使用 0xa 编码(UTF-8 前 128 位和 ASCII 相同，所以如果是 UTF-8 编码的换行符也是 0xa)
+    >
+    >   在 linux 中字符 '\n' -> line feed(LF) 表示换行, 但在 windows 和 HTTP 中字符 "\r\n" -> carriage return + line feed(CR + LF) 才表示换行
+    >
+    >   因此如果是在 win 下创建的文本直接放在 linux 中打开，那么在每行的结尾都会有一个 ^M, 这个对应了 '\r'
+    >
+    >   通过 perl 脚本可以很方便的进行 EOL(end of line) 的转换
+    >
+    >   ```shell
+    >   $ perl -pi -e "s/\r\n/\n/g" foo.txt
+    >   ```
+    >
+    >   其中 s/// 表示进行字符替换，其规则为 s/[pattern]/[placement]/
+
+* directory (目录): 可以认为 directory 就是一个数组，这个数组中的某个元素为一个 link(链接)，一个 link 就是一个映射，其映射了 filename (文件名)到某个文件，而被映射到的文件本身也可以是一个 directory，下图给出了 linux 中的典型目录结构，图中以 "/" 结尾的文件都是 directory
+
+    ![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/linux_directory_hierarchy.png)
+
+    >   在 linux 的 directory 中至少包含了两个 link，一个是 "." 其映射到了自身，一个是 ".." 其映射到了 parent directory
+
+* socket(套接字): 用来和其他进程通信的文件(这个后面讲到网络的时候会提到)
+
+>   还有一些其他的文件 pipe(管道), symbolic link(符号链接), character(字符?), block devices(块设备)
+>
+>   这些文件具体是什么，估计要看鸟叔了
+
+所有的进程都具有一个 current working directory(当前工作目录)，这个属性作为进程 context (上下文)的一部分保存在内核中
+
+## open/close file
+
+```c
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+// 如果调用成功返回 file descriptor，出错时返回 -1
+int open(char* filename, int flags, mode_t mode);
+```
+
+这个方法的返回值为一个 file descriptor，其对应了某个文件，要注意的是操作系统并没有固定为某个文件分配一个 file descriptor，每次打开相同文件返回的 file descriptor 可能是不一样的，返回值是当前可用的 file descriptor 的最小值, 如果是第一个打开的文件，那么 file descriptor 为 3(因为 0, 1, 2 分别被 stdin, stdout, stderr 占用了)
+
+>   操作系统内部对于 file descriptor 存在限制，如果一次性打开的文件时数量太多的话，会报错
+
+参数 filename 为打开文件的文件路径, 可以是以 '/' 开头的绝对路径，还可以是以 '.' 开头的相对路径, 或者是相对当前用户的路径(以 '~' 开头的路径) 
+
+参数 flag 为参数表明当前进程如何打开文件：
+
+* O_RDONLY：只读
+
+* O_WRONLY：只写
+
+* O_RDWR：可读可写
+
+* O_CREAT: 如果文件不存在，就创建一个 truncated (截断)的文件
+
+    >   这里简单理解为如果不存在就创建一个空文件
+
+* O_TRUNC: 如果文件已经存在，就将其 truncate (截断)
+
+    >   这里理解为，如果文件已经存在，那么将覆盖原来的文件，即如果执行写操作，就从头开始并覆盖原始内容
+
+* O_APPEND: 在每次写操作之前，将文件位置移动到文件结尾
+
+    >   如果这样的话每次写都不会覆盖原先的内容
+
+这些 flag 中，前 3 个表示了当前进程会以什么方式访问文件，而后 3 个指示对于打开后的文件，如何进行读写操作
+
+因为每个 flag 对应了 int 的某个 bit，因此 flag 之间可以通过或运算进行组合，比如: open("foo.txt", O_WRONLY | O_APPEND, 0) 表明了打开文件 foo.txt, 并且当后续执行写操作时，会将内容写在文件的结尾(不覆盖之前的内容)
+
+参数 mode 其实是和权限相关的，在 sys/stat.h 中定义了多种文件访问权限的 bit mode
+
+![](https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/access_permission_bits.png)
+
+此外在进程的 context 中保存了属性 umask，这个属性可以通过 syscall umask() 修改，当进程通过 open 创建一个新的文件时，此时文件的访问权限为 mode & ~umask
+
+```c
+#include "csapp.h"
+
+#define DEF_MODE S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH
+#define DEF_UMASK S_IWGRP | S_IWOTH
+
+int main(int argc, char* argv[]) {
+    umask(DEF_UMASK);
+    int fd = open("foo.txt", O_CREAT | O_APPEND | O_WRONLY, DEF_MODE);
+    close(fd);
+    return 0;
+}
+```
+
+注意到上面的例程在项目的根路径中创建了 foo.txt 这个文件拥有者具有读写权限，而其他用户只具有读权限，这个权限信息就是通过 umask 和 mode 的组合计算得到的, 通过 ll 也可以印证这个权限信息
+
+```shell
+$ ll | grep foo.txt
+-rw-r--r-- 1 buzz buzz    0 Jan  2 11:34 foo.txt
+```
+
+注意到上面举例中最后通过 close 关闭了文件，关闭文件时，只需要提供需要关闭文件的 file descriptor 即可(不是 filename)
+
+```c
+#include <unistd.h>
+// 正常情况下返回 0，如果出错了返回 -1
+int close(int fd);
+```
+
+一般情况下 close 出错都是因为重复调用，一个已经关闭的 fd，再次调用 close 会返回 -1
+
+## read/write file
+
+```c
+#include <unistd.h>
+// 返回 read 的字节数, 如果当前文件位置为 EOF 返回 0，其他出错情况返回 -1
+ssize_t read(int fd, void* buff, size_t n);
+// 返回 write 的字节数，如果出错的话返回 -1
+ssize_t write(int fd, const void* buff, size_t n);
+```
+
+read 表示从 fd 对应的文件中读取 n 个字节到 buff 中，其返回值表示了实际读取的字节数；write 表示将 buff 中的 n 个字节写入到 fd 对应的文件中
+
+>   注意到这两个 syscall 的参数 n 的类型为 size_t, 这个类型在 X86_64 中为 unsigned long，而其返回值类型为 ssize_t 这个类型为 long
+>
+>   出现在这种区别的原因在于 syscall 出错时必须返回一个负数，所以 ssize_t 完全就是一种妥协
+>
+>   这种妥协也导致了，read/write 的一次性最大可读/写字节数直接砍半了(只能取到 LONG_MAX 而不是 ULONG_MAX)
+>
+>   不过就算砍半，62 位的缓存还是太大了，$2^{62} \text{Bytes}\approx 2^{12}\text{PB}$，因此即便砍半，以当前人类的科技还不足遇到一次写满缓存的场景
+
+下面给出了一个一次从 stdin 中读取一个字节，并写到 stdout 的例子
+
+```c
+#include "csapp.h"
+
+int main(int argc, char* argv[]) {
+    char c;
+
+    while (read(STDIN_FILENO, &c, 1) != 0) write(STDOUT_FILENO, &c, 1);
+
+    return 0;
+}
+```
+
+>   这其实就是一个 echo 程序, 但这个程序的性能很差，因为每次 read/write 都只会操作一个字节，如果文本内容很长的话，意味着需要执行若干次 syscall，syscall 时很费时的，毕竟涉及到 context switching
+
+当 read/write 返回值比 n 小时，称出现了 short counts，short counts 并不一定是 read/write 出错了，它可能是以下几个原因导致的：
+
+* 遇到 EOF: 如果文件位置到文件结尾只有 20 个字节大小了，但 n 为 50 字节，那么此次 read 将返回 20, 而下一次 read 将返回 0；也正是通过这种返回值，才使得应用程序可以知道 EOF condition
+* 从终端读取文本行: 如果 read 的 file 和 terminal 相关，那么一次 read，将返回 terminal 的一个 text line，如果参数 n 比 text line 大，那么实际 read 函数的返回值为 text line 的大小
+* 通过 socket 读写: 这个在后面讲到网络的时候会具体介绍，这里简单理解为通过 socket 读写时，同时会受到内部缓存和网络时延的约束，共同作用下导致 short counts
+
+此外通过 linux pipe 进行 read/write 也可能出现 short counts
+
+## RIO
+
+csapp 提供了一个 RIO(robust I/O) 包, 这个包其实是 write/read 的包装函数，可以处理 short counts
+
+RIO 提供了两种封装，一种是不带 buffer 的，一种是带有 buffer 的；这里所谓的 buffer 是程序级别的 buffer，程序需要读取的内容已经在 buffer 中了就不会再通过 syscall 获取了
+
+### unbufferd RIO
+
+这里封装的函数为 rio_readn 和 rio_writen, 表示 read/write n 字节
+
+```c
+#include "csapp.h"
+// 返回成功 transfer 的字节数，出错了返回 -1
+ssize_t rio_readn(int fd, void* usrbuff, size_t n);
+ssize_t rio_writen(int fd, void* usrbuff, size_t n);
+```
+
+注意到封装后的函数 writen 每次的返回值一定和 n 相等，但 readn 就不一定了，如果文件位置为 EOF 会返回 0，如果读取到 EOF 结束了会返回实际读取的字节数
+
+这个封装函数属于比较低级的封装，没有改变 read/write 本身的含义，仅仅是进行了一些处理，主要是针对系统中断的一个封装，保证了出现系统中断后，会再次调用 read/write，调用者不需要考虑系统中断对于 read/write 的影响
+
+```c
+/*
+ * rio_readn - Robustly read n bytes (unbuffered)
+ */
+/* $begin rio_readn */
+ssize_t rio_readn(int fd, void *usrbuf, size_t n) 
+{
+    size_t nleft = n;
+    ssize_t nread;
+    char *bufp = usrbuf;
+
+    while (nleft > 0) {
+        if ((nread = read(fd, bufp, nleft)) < 0) {
+            if (errno == EINTR) nread = 0;  /* Interrupted by sig handler return, reset nread and call read() again*/
+            else return -1;                 /* errno set by read() */ 
+        } 
+	    else if (nread == 0) break;         /* EOF */
+	    nleft -= nread;
+	    bufp += nread;
+    }
+    return (n - nleft);                     /* Return >= 0 */
+}
+/* $end rio_readn */
+
+/*
+ * rio_writen - Robustly write n bytes (unbuffered)
+ */
+/* $begin rio_writen */
+ssize_t rio_writen(int fd, void *usrbuf, size_t n) 
+{
+    size_t nleft = n;
+    ssize_t nwritten;
+    char *bufp = usrbuf;
+
+    while (nleft > 0) {
+        if ((nwritten = write(fd, bufp, nleft)) <= 0) {
+            if (errno == EINTR)  nwritten = 0;  /* Interrupted by sig handler return, reset nwritten and call write() again */
+            else return -1;                     /* errno set by write() */
+        }
+	    nleft -= nwritten;
+	    bufp += nwritten;
+    }
+    return n;
+}
+/* $end rio_writen */
+```
+
+### buffered RIO
+
+这里的 buffer 是针对于 read 操作，当 buffer 中存在未读取的内容时，会先返回 buffer 中的内容，然后 RIO 才会考虑通过 syscall read 获取额外的字节
+
+因为涉及到 buffer，因此定义了结构 rio_t
+
+```c
+/* Persistent state for the robust I/O (Rio) package */
+/* $begin rio_t */
+#define RIO_BUFSIZE 8192
+typedef struct {
+    int rio_fd;                /* File descriptor */
+    int rio_cnt;               /* Unread bytes in internal buf */
+    char rio_buf[RIO_BUFSIZE]; /* Internal buffer */
+    char *rio_bufptr;          /* Next unread byte in internal buf */
+} rio_t;
+/* $end rio_t */
+```
+
+这里的缓存为 rio_buf, 通过 cnt 标识当前 buf 中还有多少字节没有被用户程序读取，指针 rio_bufptr 指向了用户下一个将要读取的字节
+
+RIO 提供了为 buffered read 提供了两种接口，一种是用来读取文本行的一行的，一种是用来按照字节读取的(主要针对二进制文件)
+
+不过因为 buff 功能需要通过 rio_t 提供，因此在使用 buffered RIO 之前需要先初始化 rio_t
+
+```c
+#include "csapp.h"
+
+// 初始化函数
+void rio_readinitb(rio_t* rp, int fd);
+// 读取文本文件的一行到 usrbuff 中, 如果一行的字节数超过 maxlen - 1(最后一个字节必然为 '\0'), 那么一行会被截断
+// 返回值为成功读取的字节数, 如果返回 0 表示遇到了 EOF, 返回 -1 表示出现了错误
+ssize_t rio_readlineb(rio_t* rp, void* usrbuf, size_t maxlen);
+// 读取文件的 n 个字节到 usrbuf 中
+// 返回值为成功读取的字节数, 如果返回 0 表示遇到了 EOF, 返回 -1 表示出现了错误
+ssize_t rio_readnb(rio_t* rp, void* usrbuf, size_t n);
+```
+
+
+
+## 文件元数据
+
+> metadata
+
+元数据是数据的数据，每一个文件的元数据由内核持有
+
+通过调用stat、fstat函数可以获取元数据
+
+返回值为一个stat类型的结构体
+
+![](../img/stat_structure.png)
+
+> 函数stat和函数fstat的区别在于，前者参数为文件名而后者为文件描述符
+
+## 共享文件
+
+linux内核使用三个相关的数据结构表示打开的文件
+
+* 描述符表：故名思意就是文件描述符组成的表，每一个进程拥有自己的独立的描述符表，每一个表项指向一个文件表中的一个表项
+* 文件表：即所有打开文件的表，所有进程共享。每一个表项表示一个文件，包含当前文件的位置（读取、写入）的位置，一个引用计数（reference count），和一个指向v-node表中一个表项的指针
+
+> 引用计数表示有多少个指针指向这个文件表中的这个表项
+>
+> 只有当索引计数为0的时候，内核才会删除这个表项
+
+* v-node表：所有进程共享，表项中为文件stat中的大部分信息
+
+  ![](../img/file_sharing.png)
+
+  上方第一张图是一种典型情况，即一个进程含有两个不同的文件描述符，指向不同的文件表，对应不同的文件
+
+  第二张图表示一个特例，即一个进程含有两个不同的文件描述符，指向不同的文件表，对应用一个文件
+
+  > 每一个文件描述符包含了自己的文件位置，虽然是同一个文件，但是指向的文件中不同的位置
+
+  ![](../img/child_inherite_parent.png)
+
+上图为当使用folk创建一个子进程后，父进程和子进程将共享相同的文件表，共享相同的文件位置
+
+> 也就是如果父进程先读一部分，子进程再读能续上
+
+上面的另一个变化是，文件表的索引计数变为2，表示有两个进程指向这个表项，如果要将该表项从文件表中删除，需要父进程和子进程都关闭其文件
+
+## IO重定向
+
+通过调用 dup2 函数实现 IO 重定向
+
+```c
+#include <unistd.h>
+// 正常情况下会返回一个 descriptor, 出错了返回 -1
+int dup2(int oldfd, int newfd);
+```
+
+>   事实上这个 syscall 在 shell lab 中已经遇到过了
+
+他会将oldfd表项复制到newfd，如果newfd尚未关闭，会先将其关闭
+
+![](../img/IO_redircetion.png)
+
+调用函数dup2（4，1）会将描述表中文件描述符为1的表项覆盖掉，并使其指向文件描述符为4的表项指向的文件，此后因为文件表中File A的索引计数为0，其会表项会在文件表中删除
+
+# 虚拟内存
+
+将内存认为是一个大数组，通过数组下标索引的偏移量进行寻址
+
+磁盘虚拟化：磁盘控制器拦截内核的IO请求实现磁盘虚拟化。实际的存储上，磁盘分扇区，磁道...，但对于操作系统而言磁盘是连续的块
+
+对于虚拟内存而言，拦截处理器IO请求，管理内存单元的为MMU（memory management unit）
+
+当处理器直接访问的是虚拟地址，其发出指令中的地址即为虚拟地址，假设处理器执行mov指令将虚拟地址上数据存储在寄存器上，其发出的地址会被MMU拦截，并翻译成实际地址，这个过程称为地址转换
+
+![](../img/virtual_address.png)
+
+## 地址空间
+
+* 地址空间：就是一个集合，地址的集合
+* 线性地址空间：连续的非负整数集合
+
+> 如：0，1，2，...
+
+* 虚拟地址空间：大小为$2^n$的地址空间集合
+* 物理地址空间：大小为$2^m$的地址空间集合
+
+虚拟地址空间和物理地址空间都是线性地址空间，通常虚拟地址空间比物理地址空间大
+
+使用虚拟内存的原因：
+
+* 可以更高效地使用内存
+
+> 将内存看成是虚拟地址空间的缓存
+
+* 可以简化内存管理：每一个进程使用相同的线性地址空间
+
+> 这个确实好
+
+* 可以分离地址空间：因为使用虚拟内存，进程的地址空间是都是相同的，也就是说不会出现一个进程非法访问另一个进程的内存地址
+
+> 这样用户程序就不能访问更高权限的内核
+
+## 虚拟内存作为缓存
+
+可以认为虚拟内存（地址）是磁盘上的字节序列，将主存视为虚拟内存（地址）的缓存
+
+> 就是把主存认为是虚拟内存的缓存
+
+![](../img/VM_mappingTo_main_memory.png)
+
+同样的数据在虚拟内存中以块为单位存储，称之为页，一个常规的大小为4KB
+
+因为主存（物理内存）是虚拟内存的缓存，所以，主存中存储了一部分页
+
+主存和虚拟内存之间存在一个映射函数，在虚拟内存中存在三种页：
+
+* 未分配的
+* 缓存的
+* 未缓存的
+
+> 我是这样理解的，因为可以认为虚拟内存存储在磁盘上，所以我认为
+>
+> 未分配的就是由于虚拟地址空间大于磁盘空间，从而该地址未分配任何指向，不占用物理磁盘空间
+>
+> 缓存的，故名思意，表达的是已经映射到主存中的页
+>
+> 未缓存的，就是那些在物理磁盘上的，却不再主存中的
+>
+> 所以其实占比最大的是未分配空间的 
+
+在虚拟内存中，只存在一个组，就是说是全相联的，每个页可以存储在主存中的任意位置
+
+在虚拟内存中，总是使用延时写回
+
+> 在被替换掉的时候再写
+
+## 页表
+
+由内核维护，是进程上下文的一部分，每个进程具有独立的页表
+
+> 因为虚拟内存使得每个进程具有相同的虚拟地址空间，而程序运行的时候需要将虚拟地址转换为实际地址，所以每个进程的页表都是不同的
+
+页表将虚拟页（虚拟内存中的页）映射到物理页（主存中的页），MMU通过访问页表实现虚拟地址的翻译
+
+> 页表自身存放于主存中
+
+页表其实就是一个大数组，数组中的元素为PTE（page table entry）页表条目
+
+![](../img/page_table.png)
+
+页表中存在有效位，该位置位的时候说明此时该虚拟地址映射的物理地址存在于缓存中
+
+页表中存在条目，将虚拟地址映射到主存中的实际物理地址中，而对于那些未缓存的虚拟地址，其映射关系指向物理磁盘上的位置，当然还存在未分配的条目，就是空
+
+### 页命中
+
+![](../img/page_hit.png)
+
+索然无味
+
+处理器向MMU发出虚拟地址，MMU根据页表获得物理地址，发现其已经被缓存了
+
+### 缺页
+
+![](../img/page_fault.png)
+
+缺页会触发缺页异样，从而控制权交给了内核执行缺页处理程序，从主存中选择被牺牲的页，替换
+
+随后重新执行造成缺页异常的指令
+
+### 分配页
+
+![](../img/allocate_page.png)
+
+调用malloc函数将创建虚拟内存到磁盘的映射
+
+## 虚拟内存管理内存
+
+核心：每个进程拥有独立的地址空间，每个进程拥有独立的页表存储于进程的上下文中
+
+![](../img/VM_provide_separate_address.png)
+
+不同的进程，可以将不同的虚拟页映射到相同的物理页（实现了数据共享）
+
+## 虚拟内存保护内存
+
+![](../img/VM_protect_memory.png)
+
+通过在PTE中增加控制位，实现对访问权限的控制
+
+> 做了违反权限的操作会报异常：段错误
+
+## 地址翻译
+
+假设虚拟地址空间N个元素，物理地址空间M个元素，一般而言，N大于M
+
+![](../img/address_translation.png)
+
+考虑一个n位的虚拟地址，由两部分组成：VPN（virtual page number，虚拟页号）和VNO（virtual page offset，虚拟页偏移）
+
+现在假设一个块大小可以由pbit表示，对应对VNO
+
+考虑一个m位的物理地址，也是由两部分组成：PPN（物理页号）和PPO（物理页偏移）
+
+现在考虑VPO和PPO是相等的
+
+页表具有一个基址：其地址存储在CR3上，这个基址是实际的物理地址
+
+MMU根据VPN，在页表中找到对应的PTE，如果PTE对应有效位位1，则PTE中的地址部分存储的就是PPN；如果为0将触发缺页异常
+
+![](../img/page_hit_and_fault.png)
+
+先考虑页命中的情况：
+
+首先处理器生成虚拟地址，并将其传送给MMU
+
+MMU生成PTE地址，并发送给主存以获取PTE，因为PTE中有效位为1，从而MMU可以根据PTE生成实际物理地址，并将其发送给主存，随后主存将对应物理地址上的数据发送给处理器
+
+然后考虑缺页的情况：
+
+前几步是相同的，获取到PTE，因为是缺页，所以PTE对应的有效位为0，这将导致MMU触发缺页异常，控制权将转移到内核调用异常处理函数处理异常，然后处理器会选择出要被牺牲的页进行替换，要注意的是替换的时候，如果旧的页已经被更改了，需要将其写回磁盘中。更新好PTE后将再次执行产生缺页异常的指令
+
+## 加入高速缓存
+
+现在考虑将L1缓存加入这个体系结构中
+
+![](../img/CPU_MMU_L1Cache_MainMemory.png)
+
+道理还是一样的，就是中间多了一级缓存
+
+MMU会根据虚拟地址生成PTE地址，传送给L1cache试图获得对应的PTE，如果L1cache中有就直接将PTE发送给MMU；如果L1中没有，L1就将这个地址发送给主存，主存将对应PTE地址上的PTE发送给L1cache；经过L1cache缓存记录该PTE后，将其发送给MMU
+
+MMU根据PTE生成物理地址，发送给L1cache，如果L1cache中存在对应物理地址的数据，就直接发送给处理器；如果没有的话，就将该物理地址发送给主存，从而获取到数据，同样的L1cache需要缓存一下，然后再发送给处理器
+
+除了MMU之外，没有其他部分能够根据虚拟地址生成PTE地址，也没有其他部分能根据PTE生成物理地址
+
+## TLB加速地址翻译
+
+TLB：translation lookside buffer
+
+根据上面的说法，无论如何，要获取数据，必须先获取PTE
+
+TLB作用是加速PTE的获取
+
+> 尽管L1cache的作用也是这个
+
+现在再MMU中有一个小的PTE缓存称为TLB
+
+![](../img/virtual_address_with_TLB.png)
+
+现在因为引入了TLB，虚拟地址有了新的变化，VPN部分，就是之前的虚拟页号部分，又分为了两部分，一部分作为TLB的Index，一部分作为TLB的Tag
+
+TLB因为是缓存，需要明确组和组内的不同行，组通过Index确定，行通过tag进行匹配
+
+> index部分有几位取决于TLB中有几个组，剩下的都是tag
+
+![](../img/TLB_hit_and_miss.png)
+
+现在考虑带有TLB的数据获取过程
+
+> 如果发生TLB未命中，根据虚拟地址生成PTE地址，获取PTE，主存将PTE返回给MMU的时候，MMU会将该条PTE缓存到TLB中
+
+## 多级页表
+
+对于一个64位的操作系统，其实际有效的地址有48位
+
+考虑页大小为4KB（这里的意思是一个页中能放下4K个地址）
+
+那么如果要映射全部的地址需要$\frac{2^{48}}{2^{12}} = 2^{36}$个页
+
+也就是说一个页表中存在$2^{36}$个PTE
+
+对于64位的系统一个PTE占用8个字节
+
+这么大的页表需要空间：$2^{39}Byte$
+
+前面也说了，每个进程的页表是独立的，就是说每一个进程都需要一个这么大的页表
+
+这显然有点离谱了
+
+通过多级页表可以压缩页表的大小
+
+假设现在有两级页表，这两级页表的大小完全一致，只不过逻辑上具有层级关系
+
+现在考虑一个32位的地址，前10位标识一级页表的下标索引，后面的10位标识二级页表的下标索引，最后的12位标识页内偏移
+
+注意在32位地址的系统中PTE的大小为4Byte
+
+这样一个每一个页表具有固定大小4KByte
+
+一个一级页表映射了$2^{10}$个二级页表，每一个二级页表大小为4KByte
+
+现在如果假设每一个页表都建立了和物理地址的映射关系
+
+那么一共具有：$2^{10} + 1$个页表，每一个大小为4KByte，总大小为4MByte + 4KByte
+
+> 对于32位的系统，如果页表不分级，那么需要一个大小为4MByte的页表
+
+所以能看出来，页表分级，相当于把原来的一个页表打散了
+
+至于为什么多级页表能够节省空间，是因为在分级的情况下，不会出现每一个地址都需要映射的要求，即不会真的需要$2^{10}$个二级页表完成和物理地址的映射关系
+
+真正的问题在于，为什么如果页表不分级，就必须让PTE连续呢？如果PTE可以不连续，不需要的项不分配，好像也可以节省空间：银杏书里面写的是，因为页表是一个数组，它寻址的规则是基址寄存器中的地址（x86中为CR3）+ 偏移量（VPN）来进行寻址
+
+> 有没有厉害的大神魔改一下寻址的方式啊，这样页表就不用分级了
+
+![](../img/k_level_page_table.png)
+
+## 一个例子
+
+![](../img/a_small_memory_system.png)
+
+考虑这样一个系统，具有14位的虚拟地址，12位的物理地址，页大小为64
+
+这样，页偏移占6位，VPN有8位，PPN有6位
+
+![](../img/memory_for_small_system.png)
+
+考虑TLB具有四组，每组中有4块，即四路组相联共16个条目
+
+所以VPN中有2位作为TLBI，标识组
+
+剩下的6位都是TLBT
+
+因为VPN一共有8位，所以一共有：$2^8$个页表项
+
+上图中仅考虑了前16项，只有当有效位为1的时候后面对应的物理地址才是有效的
+
+考虑高速缓存为直接映射缓存，具有16组，通过物理地址寻址（12位），每一行具有4个块，所以2位的块偏移，因为具有16行，所以4位的组索引，剩下的6位都是tag
+
+根据上图中的结构，tag位（6位）和物理页号相同
+
+现在考虑CPU发出虚拟地址0x03d4
+
+![](../img/0x03d4.png)
+
+得到需要的是位于TLB中第3组中tag为3的块
+
+查询上面的TLB得到PPN为0x0d
+
+此后，TLB将该值返回MMU，MMU组合生成实际的物理地址：0x0354
+
+![](../img/0x0354.png)
+
+> 要注意的是，如果TLB未命中，那么MMU需要从主存中获取PTE，通过发送的还是实际的物理地址：基址寄存器：CR3中的地址值加上VPN的值，发送给主存，获取对应的PTE
+
+现在MMU生成了实际是物理地址，将其发送给缓存，缓存中发现，CI值为5表示第五组中的数据，然后因为物理地址中的标记位为0x0d，和tag匹配，且在高速缓存中第五组是有效的，然后发现偏移量CO为0，于是返回数据的值为0x36
+
+随后将其返回给MMU，MMU将其返回给处理器
+
+现在假设处理器发出的地址为0x0020
+
+此时VPN为0，VPO为0x20
+
+根据上面的TLB发现未命中（tag匹配但是有效位为0）
+
+所以将查询页表，在上面的页表中，发现，VPN为0的地址对应的值为0x28，即得到PPN为0x28（这是在页表中有效位为1的情况下，如果此时有效位为0，将触发缺页异常）
+
+随后MMU构建好物理地址，并发送给高速缓存获取数据
+
+此时，CO为0，CI为8，CT为0x28
+
+查询缓存发现未命中，所以需要将这个物理地址发送给主存获取实际的数据
+
+## 实际的一个内存系统
+
+> 倒装了属于是
+
+![](../img/i7_memory_system.png)
+
+4核远古时代i7
+
+每一个核都具有独立的寄存器
+
+有两个L1cache，数据缓存和指令缓存；数据缓存用来保存内存中的读取到的数据，指令缓存保存从代码段中获取的指令；8路组相联，访问时间为4个时钟周期
+
+L2cache对于数据和指令统一保存，也是8路组相联，访问时间为10个时钟周期
+
+L3缓存更大一点，是16路组相联，在处理器外部，访问时间为30-50个时钟周期
+
+如你所见，TLB作为一个缓存PTE的部件，居然也有缓存结构
+
+![](../img/i7_address_translation.png)
+
+首先处理器产生一个虚拟地址，48位，其中12位标识页偏移，前面36位位VPN
+
+TLB具有16组（上面图中64个条目，4路组相联的d-TLB）所以36位的VPN中有4位标识TLBI，剩下的32位都是tag
+
+如果TLB命中，直接返回对应的PPN，MMU构造出物理地址发给高速缓存L1cache
+
+如果TLB未命中，需要将查询页表，在这里分为4级页表，每一级由9位地址标识
+
+总之现在获取到物理地址并发送给了L1cache，然后和前面类似的查询L1cache中是否由对应物理地址的数据，将物理地址分为CO、CI、CT三部分组成；因为L1cache中具有64组，所以CI具有6位
+
+> CI和CO是物理地址中的最低位，他们加在一起的长度和VPO相等，这是必然的，就是说PPO就表示了CI和CO
+
+40位的PPN作为tag和cache中的数据进行匹配
+
+如果命中直接返回数据，不然就去L2、L3cache中找数据
+
+![](../img/level1_level2_level_3_page_table_entry.png)
+
+因为页表分为4级，每一级的PTE长成这样，如你所见64位，其中12-52位一共40位标识一个物理地址，其实是下一级页表所在的物理地址（基址）
+
+0位标识有效位（present）1的时候标识下一级页表在内存中，如果为0标识下一级在磁盘中，而此时的物理地址就是页表在磁盘中的物理地址
+
+![](../img/level4_page_table_entry.png)
+
+没什么不一样，就是说此时指向的是一个实际是物理地址（不再是页表了）
+
+![](../img/i7_page_table_translation.png)
+
+## 投机取巧的intel
+
+前面说过虚拟地址和物理地址在页偏移部分是相同的，就是说VPO和PPO部分完全一致
+
+所以地址翻译的过程实际上是把VPN换成PPN
+
+那根据前面说过的，访问数据的时候，根据CI确定组，根据CO确定块偏移
+
+现在只要VPO（注意VPO12位而CI和CO加在一起也是12位）确定，这一部分就是确定的了，所以，实际上MMU会先将VPO送到L1cache，确定好位置，就等着tag部分（就是PPN）来了
+
+这其实某种程度上加速了从L1缓存获取数据的速度
+
+> 可以认为搜索L1cache和地址翻译是同时进行的
+>
+> 也正是因为这样，L1cache不能做的很大，因为就12位提供索引位和偏移量，这些是固定的了，如果要增加L1cache的大小就只能增加一组中的行数
+
+## linux中的虚拟内存
+
+![](../img/linux_virtual_memory.png)
+
+内核虚拟内存包含内核中的代码和数据结构
+
+内核的虚拟内存中存在一部分区域被映射到所有进程共享的物理内存中，就是说不管是哪一个进程，这部分虚拟内存都被映射到物理内存中的同一个位置，比如内核的代码和全局数据结构
+
+当然还有一部分区域是每个进程独立的，比如页表，进程切换的时候的上下文信息
+
+### linux中的区域
+
+![](../img/linux_organize_virtual_memory.png)
+
+linux将虚拟内存分为区域的集合，一个区域是虚拟内存的连续片（chunk）
+
+比如代码段，数据段、堆、共享库段、用户栈，这些都是不同的区域
+
+内核为系统的每一个进程维护了一个单独的结构，称为任务结构（task struct），这里面有一个指针指向mm_struct，描述了虚拟内存的状态
+
+mm_struct中有一个指针pgd，指向一级页表的基址
+
+> 因为页表是进程独有的，所以属于进程上下文的一部分，当进行进程切换的时候，内核会将pgd中的条目复制到CR3中，这就切换页表了
+
+mm_struct中还有一个指针mmap，指向一个结构体area_struct，这个结构体定义了每个区域的开始和结束位置（应该也是通过指针定义的），还有当前区域所包含页的读写权限，也包括一个标志位标识当前这个区域是不是共享区域
+
+> 其实是一个链表，就像上面那样
+
+## linux的缺页异常
+
+![](../img/linux_page_fault_handling.png)
+
+当MMU进行地址翻译的时候，发现缺页，触发缺页异常，进入内核调用内核的缺页处理程序
+
+首先判断当前地址A（就是触发缺页异常的地址）的合法性，就是判断A是否在某个区域的合法区域内，此时会遍历链表，如果地址不合法，就触发段错误，并终止进程
+
+其次会判断操作是否是合法的，比如对一个只读的页进行写操作，显然是非法的，此时会触发保护异常，并终止进程
+
+> 内核检查这个地址所在区域的保护位
+
+其次才会换页
+
+## 内存映射
+
+linux通过将一个虚拟内存区域和磁盘上的对象关联起来实现内存映射，就是说初始化虚拟页
+
+一个区域内的每一个页都需要和一个文件中的一部分关联起来，页中的数据的初始值就来源于那个文件
+
+页的初始值可以来源于一个普通的文件，也可以来源一个匿名文件
+
+匿名文件由内核创建，大小任意，其中的数据只有0（映射的时候，页中的数据全部为0）；所以其实，这个文件并不存在，只是说一个虚拟页初始化的时候页中的数据全都是0
+
+### 共享对象
+
+![](../img/share_object.png)
+
+就是说两个进程的虚拟内存映射到同一个物理内存，从而实现共享对象；这两个进程的虚拟内存之间是没有关系的
+
+有一种私有对象：写时复制
+
+> 通过地址中的tag，将这个对象标记为写时复制
+
+考虑两个进程，将这个私有对象映射到虚拟内存中的不同区域；但是这个对象并不是共享的，如果对这个对象进行读操作，那么读起来就像共享对象一样；但如果进行写操作，那么此时会在物理内存中创建对应写的页的一个拷贝，并更近对应进程的页表，新的拷贝页是具有写权限的
+
+### fork
+
+对于fork操作，子进程拥有和父进程完全一致的地址空间，但彼此之间是相互独立的；正常情况下fork的开销很大，因为需要一个完整的拷贝；
+
+现在考虑私有的写时拷贝对象，大大减小了fork的时候创建子进程的开销，现在只需要将父进程的结构mm_struct,，area_struct，还有页表复制一份给子进程就行了，这些开销是不能省的，随后将两个进程的每个页面都标记为只读，然后将区域结构标记为私有的写时拷贝
+
+### execve
+
+在当前的进程中加载并执行一个新的函数
+
+它其实是删除了当前进程的所有 area_struct 和页表，并且为新的区域创建了新的 area_struct 和页表
+
+将区域初始化，将页表重新映射，代码和数据区域分别对应可执行文件的.text和.data部分，这两部分是私有的；.bss区域是请求2进制0的，就是说映射的是匿名文件，也是私有的，堆栈同理
+
+![](../img/execve_load.png)
+
+所有进程都共享内存中的libc库，所以这一部分是共享的
+
+其实截至到现在，不过是重新映射了一下，文件可能还没有被加载进入内存，只有当执行的时候，才会将需要的部分加载进入内存
+
+最后execve会将程序计数器%rip指向.text部分
+
+程序计数器指向了.text部分，会出现缺页异常，随后才进行加载
+
+### 系统调用mmap
+
+可以用来创建新的虚拟内存区域，并将对象映射到这部分区域
+
+![](../img/mmap.png)
+
+函数具有一个指针参数，start指向一个开始地址，以及一个length，表明需要映射的空间大小，并将文件描述符fd指定的对象映射到这个区域（offset表明对象在文件中的偏移量）
+
+prot参数表明当前区域的权限，只读的、可读可写的、可执行的
+
+flag参数表明当前区域的对象类型，私有的，写时复制的、匿名的、共享的
+
+这个函数的返回值是指向这个映射区域开头的指针
+
+> 返回值可能不是传入的start，因为start开头的区域可能太大了，覆盖了一部分其他区域，所以返回的时候需要指明实际的地址
+
+# 动态内存分配
+
+动态内存分配器维护进程的虚拟空间的区域称为堆
+
+malloc函数分配的内存就是在堆上分配
+
+分配器将堆维护为连续的块的集合，块的状态要么是已经被分配的，要么是空闲的
+
+现在具有两种分配器：
+
+* 显式分配器：需要程序显式的分配块，释放块；通过 malloc 分配，使用 free 释放
+* 隐式分配器：当程序检测到块已经不被使用的时候会释放块（垃圾回收器）；JVM中的GC
+
+## malloc package
+
+malloc 已经足够熟悉了
+
+```c
+#include <stdlib.h>
+// 如果分配成功了，返回指向堆中对应空间的指针，否则返回 NULL
+void* malloc(size_t size);
+```
+
