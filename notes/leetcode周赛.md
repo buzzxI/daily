@@ -7220,6 +7220,354 @@ class Solution {
 }
 ```
 
+# [第 95 场双周赛](https://leetcode.cn/contest/biweekly-contest-95)
+
+## [2525. 根据规则将箱子分类](https://leetcode.cn/problems/categorize-box-according-to-criteria/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/2525.png)
+
+签到题，直接分类讨论即可
+
+```java
+class Solution {
+    private static final int l1 = (int)1e4;
+    private static final int l2 = (int)1e9;
+    public String categorizeBox(int length, int width, int height, int mass) {
+        boolean b = is_b(length, width, height, mass);
+        boolean h = is_h(mass);
+        if (b && h) return "Both";
+        if (!b && !h) return "Neither";
+        if (b) return "Bulky";
+        return "Heavy";
+    }
+
+    private boolean is_h(int mass) {
+        return mass >= 100;
+    }
+
+    private boolean is_b(int length, int width, int height, int mass) {
+        if (length >= l1 || width >= l1 || height >= l1 || mass >= l1) return true;
+        return (long)length * width * height >= l2;
+    }
+}
+```
+
+## [2526. 找到数据流中的连续整数](https://leetcode.cn/problems/find-consecutive-integers-from-a-data-stream/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/2526.png)
+
+其实是一个计数问题，因为需要结尾的连续 k 位相同，所以如果 consec 的参数和 num 不同，直接重置计数器即可
+
+```java
+class DataStream {
+    private int val;
+    private int k;
+    private int cnt;
+    public DataStream(int value, int k) {
+        this.cnt = 0;
+        this.val = value;
+        this.k = k;
+    }
+    
+    public boolean consec(int num) {
+        if (num == val) cnt++;
+        else cnt = 0;
+        return cnt >= k; 
+    }
+}
+
+/**
+ * Your DataStream object will be instantiated and called as such:
+ * DataStream obj = new DataStream(value, k);
+ * boolean param_1 = obj.consec(num);
+ */
+```
+
+## [2527. 查询数组 Xor 美丽值](https://leetcode.cn/problems/find-xor-beauty-of-array/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/2527.png)
+
+比赛的时候推导结论花了很长时间，考虑三元组 (a | b) & c, 因为 i, j, k 之间不存在大小制约关系，因此，这里考虑 a, b, c 的取值是相互独立的，且均可以取到 nums[0] 到 nums[nums.length - 1]
+
+*   当 a, b, c 对应的下标, 均相同时，此时 (a | b) & c = a, 此时的异或为 nums 中各个元素的异或
+
+*   当 a 和 b 对应的下标相同时，此时 (a | b) & c = a & c, 其中 a 和 c 对应下标一定不同，那么根据对称性，考虑如果有 nums[i] & nums[j], 那么一定有 nums[j] & nums[i], 即此时所有可能的取值都是成对出现的，此时异或的结果一定为 0
+
+*   当 a 和 c 对应的下标相同时，此时 (a | b) & c = (a | b) & a, 其中 a 和 b 对应的下标一定不同, 如果存在 (nums[i] | nums[j]) & nums[i] 那么一定对称的存在 (nums[j] | nums[i]) & nums[j]
+
+*   当 b 和 c 对应的下标相同时，此时 (a | b) & c = (a | b) & b, 其中 a 和 b 对应的下标一定不同, 这种情况和上面恰好时对应的，即如果存在 (nums[i] | nums[j]) & nums[j] 一定存在对称的情况 (nums[i] | nums[j]) & nums[i];
+
+    综合前面两种情况，第二种中的每个情况，都能在第一种中找到与其相等的例子，因此前面两种情况异或的和为 0
+
+*   当 a, b, c 对应的下标互不相等时, 此时 i, j, k 互不相等，如果存在 (nums[i] | nums[j]) & nums[k], 那么一定存在对称的情况 (nums[j] | nums[i]) & nums[k], 即这种情况下的异或和为 0
+
+综合上面的五种分类，只有第一种分类的异或和是有效的，因此本题的解其实就是数组中所有数字的异或和
+
+```java
+class Solution {
+    public int xorBeauty(int[] nums) {
+        int rst = 0;
+        for (int num : nums) rst ^= num;
+        return rst;
+    }
+}
+```
+
+## [2528. 最大化城市的最小供电站数目](https://leetcode.cn/problems/maximize-the-minimum-powered-city/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/2528.png)
+
+其实看到最大化最小值就想着使用二分了，但是这个题因为需要区间更新，比赛的时候都想着使用线段树了，后边发现无法枚举每个点的合法取值，就放弃了
+
+这个题最讨厌的点在于区间更新，需要快速求解当添加新的供电站后，后续节点的新的个数，且因为这个个数受到了半径 r 的制约，因此看起来好像不是那么好更新
+
+比赛的时候看到输入 station 就想着如何快速求解每个位置的初始供电站个数，因为半径 r 可以很大，因此当时的想法是通过 $O(n^2)$ 的方式遍历，确实太慢了
+
+对于 station[i] 而言，其能够覆盖的范围为 [i - r, i + r], 那么其他的对于当前位置具有贡献的供电站也属于这个范围, 即所有 [i - r, i + r] 范围内的供电站，均对当前位置有贡献，因此 base[i] 即为一个 station 数组的 [i - r, i + r] 的区间和
+
+这样通过前缀和数组，可以快速求解位置 i 原始的供电站数目 base[i]
+
+而二分的一般的就是结果集，这里二分的就是最小值，check 函数的基础就是求出给定 mid 的情况下，让 base 满足所有站均不小于 mid 的最小值
+
+根据贪心的想法，如果从前向后遍历所有的位置，那么对于位置 i，如果 base[i] 小于 mid，那么应该在 i + r 的地方建设供电站，这样其辐射面积为 [i, i + 2r], 不仅服务了当前位置，还服务了后面的位置
+
+但如果每次更新都需要让 [i + r, i + 2r] 范围内自增的话，那么一次 check 的时间复杂度还是会来到 $O(n^2)$
+
+因此这里使用一个差分数组更新区间和，而因为从前向后遍历位置，因此差分数组 sub，其实表示的是范围 [i, j] 的额外增益
+
+```java
+class Solution {
+    public long maxPower(int[] stations, int r, int k) {
+        int len = stations.length;
+        long[] preSum = new long[len + 1];
+        for (int i = 1; i <= len; i++) preSum[i] = preSum[i - 1] + stations[i - 1];
+        long[] base = new long[len];
+        // 前缀和求解每个位置的初值 base
+        for (int i = 0; i < len; i++) {
+            int left = Math.max(0, i - r);
+            int right = Math.min(len, i + r + 1);
+            base[i] = preSum[right] - preSum[left];
+        }
+        long left = 0;
+        long right = preSum[len] + k;
+        // 二分最小值
+        while (left < right) {
+            long mid = left + ((right - left + 1) >> 1);
+            if (check(base, mid, r) > k) right = mid - 1;
+            else left = mid;
+        }
+        return left;
+    }
+
+    private long check(long[] base, long target, int r) {
+        int len = base.length;
+        // 差分数组
+        long[] sub = new long[len + 1];
+        // pre 为差分数组的前缀和
+        long pre = 0;
+        long rst = 0;
+        for (int i = 0; i < len; i++) {
+            pre += sub[i];
+            // 如果当前位置比 target 更小，那么需要在 i + r 处建站
+            if (target - pre - base[i] > 0) {
+                long gain = target - pre - base[i];
+                rst += gain;
+                // 注意这里不需要更新 sub[i], 只需要更新 sub[i + 2r] 即可, 因为当前位置遍历过之后不会再处理了
+                // 当前位置的增益，可以通过 pre 体现
+                pre += gain;
+                sub[Math.min(i + 2 * r + 1, len)] -= gain;
+            }
+        }
+        return rst;
+    }
+}
+```
+
+# [第 327 场周赛](https://leetcode.cn/contest/weekly-contest-327/)
+
+## [6283. 正整数和负整数的最大计数](https://leetcode.cn/problems/maximum-count-of-positive-integer-and-negative-integer/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6283.png)
+
+签到题，这个题说了是非递减顺序，因此直接遍历就行
+
+```java
+class Solution {
+    public int maximumCount(int[] nums) {
+        int ne = 0;
+        int po = 0;
+        for (int num : nums) {
+            if (num < 0) ne++;
+            else if (num > 0) po++;
+        }
+        return Math.max(ne, po);
+    }
+}
+```
+
+>   但正是因为递减顺序，因此还可以通过二分边界 0，快速求解负数和正数的个数
+>
+>   只不过这个题输入范围才 2000, 根本体现不出来二分的优势
+
+## [6285. 执行 K 次操作后的最大分数](https://leetcode.cn/problems/maximal-score-after-applying-k-operations/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6285.png)
+
+直接使用堆模拟即可
+
+```java
+class Solution {
+    public long maxKelements(int[] nums, int k) {
+        long rst = 0;
+        Queue<Integer> heap = new PriorityQueue<>((n1, n2) -> n2 - n1);
+        for (int num : nums) heap.offer(num);
+        while (k > 0) {
+            int tmp = heap.poll();
+            rst += tmp;
+            tmp = (tmp + 2) / 3;
+            heap.offer(tmp);
+            k--;
+        }
+        return rst;
+    }
+}
+```
+
+## [6284. 使字符串总不同字符的数目相等](https://leetcode.cn/problems/make-number-of-distinct-characters-equal/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6284.png)
+
+比赛的时候就想着分类讨论了，就想着如果类别差 0, 差 1, 差 2 这三种情况有解，然后 WA 了 5 发, 调了半天
+
+其实根据不需要管到底到底有多少种，因为 word1 和 word2 中本身只有 26 种字符，直接暴力枚举所有交换的可能性即可，交换完之后看看新的种类个数是否相等即可
+
+```java
+class Solution {
+    public boolean isItPossible(String word1, String word2) {
+        int[] freq1 = new int[26];
+        int[] freq2 = new int[26];
+        int cnt1 = 0;
+        int cnt2 = 0;
+        for (int i = 0; i < word1.length(); i++) freq1[word1.charAt(i) - 'a']++;
+        for (int i = 0; i < word2.length(); i++) freq2[word2.charAt(i) - 'a']++;
+        for (int i = 0; i < 26; i++) {
+            if (freq1[i] > 0) cnt1++;
+            if (freq2[i] > 0) cnt2++;
+        } 
+
+        for (int i = 0; i < 26; i++) {
+            if (freq1[i] == 0) continue;
+            for (int j = 0; j < 26; j++) {
+                if (freq2[j] == 0) continue;
+                // 将 word1[i] 和 word2[j] 交换
+                int c1 = cnt1;
+                int c2 = cnt2;
+                freq1[i]--;
+                freq2[i]++;
+                if (freq1[i] == 0) c1--;
+                if (freq2[i] == 1) c2++;
+                freq1[j]++;
+                freq2[j]--;
+                if (freq1[j] == 1) c1++;
+                if (freq2[j] == 0) c2--; 
+				// 如果 c1 == c2 说明有解
+                if (c1 == c2) return true;
+				// 恢复现场
+                freq1[i]++;
+                freq2[i]--;
+                freq1[j]--;
+                freq2[j]++;
+            }
+        }
+        return false;
+    }
+}
+```
+
+## [6306. 过桥的时间](https://leetcode.cn/problems/time-to-cross-a-bridge/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6306.png)
+
+题目太长了，不想做，这是一个很麻烦的模拟题
+
+首先过桥存在先后顺序，因为桥上同一时间只能过一个人，而从右向左的优先级大于从左向右的优先级，因此只要右侧有人等待，就需要让右侧先通行
+
+此外如果如果存在多个需要过桥的人，那么效率最低的先过，为了高效枚举当前队列中效率最低的，需要使用堆，而显然，左侧堆和右侧堆应该是分开的，即现在需要两个堆，分别表示从左侧向右的队伍和从右侧向左的队伍
+
+当工人到达对岸后，需要搬/放箱子，而每个工人的需要的时间开销是不同的，显然只有越快完成搬/放箱子的工人可以越早的进入桥的队列中排队，从而执行下一个任务，因此对于两岸，也需要堆，堆会根据时间进行排序
+
+具体的细节，可以看[灵神题解](https://leetcode.cn/problems/time-to-cross-a-bridge/solution/by-endlesscheng-nzqo/)
+
+```java
+class Solution {
+	private static final int INF = 0x3f3f3f3f;
+	public int findCrossingTime(int n, int k, int[][] time) {
+        // 时间开销
+		int cur = 0;
+        // 桥两岸的优先队列，保存的是 time 的下标索引
+		Queue<Integer> q_l = new PriorityQueue<>((i1, i2) -> {
+			int t1 = time[i1][0] + time[i1][2];
+			int t2 = time[i2][0] + time[i2][2];
+			if (t1 == t2) return i2 - i1;
+			return t2 - t1;
+		});
+        Queue<Integer> q_r = new PriorityQueue<>((i1, i2) -> {
+			int t1 = time[i1][0] + time[i1][2];
+			int t2 = time[i2][0] + time[i2][2];
+			if (t1 == t2) return i2 - i1;
+			return t2 - t1;
+		});
+        // 两岸工厂的优先队列，保存的是 time 下标索引和时间
+		Queue<int[]> w_l = new PriorityQueue<>((ns1, ns2) -> ns1[1] - ns2[1]);
+		Queue<int[]> w_r = new PriorityQueue<>((ns1, ns2) -> ns1[1] - ns2[1]);
+		// 默认让所有的工人进入桥左侧队列
+		for (int i = 0; i < k; i++) q_l.offer(i);
+		// 循环的结束条件为 n 为 0(箱子搬完了)
+		while (n > 0) {
+            // 工人过桥之前，让已经完成搬/放的工人进入对应的优先队列中排队
+			while (!w_l.isEmpty() && w_l.peek()[1] <= cur) q_l.offer(w_l.poll()[0]);
+			while (!w_r.isEmpty() && w_r.peek()[1] <= cur) q_r.offer(w_r.poll()[0]);
+			// 右侧队列优先
+			if (!q_r.isEmpty()) {
+				int idx = q_r.poll();
+                // 当前时间根据过桥时间更新
+				cur += time[idx][2];
+                // t 为工人到达对岸后完成任务的时间
+				int t = cur + time[idx][3];
+				w_l.offer(new int[]{idx, t});
+                // 对于左侧的分析和对于右侧基本一致
+			} else if (!q_l.isEmpty()){
+				int idx = q_l.poll();
+				cur += time[idx][0];
+				int t = cur + time[idx][1];
+				w_r.offer(new int[]{idx, t});
+               	// n 自减的条件为左侧工人到达了右侧
+                // 因为只要左侧派出了一个工人，就一定会带回一个箱子
+				n--;
+			} else {
+                // 最后的 else 用来处理，左右侧工厂的工人都正在搬/放箱子，此时两个队列都是空
+                // 此时让 cur 更新到第一个完成任务的工人的时间
+				cur = INF;
+				if (!w_l.isEmpty()) cur = w_l.peek()[1];
+				if (!w_r.isEmpty()) cur = Math.min(cur, w_r.peek()[1]);
+			}
+		}
+		// 最终出循环时，右侧工厂中还会剩余至少一个工人
+        // 最终需要让所有右侧的工人回到左侧即可
+		while (!w_r.isEmpty()) {
+			int[] tmp = w_r.poll();
+			cur = Math.max(cur, tmp[1]);
+			cur += time[tmp[0]][2];
+		}
+		return cur;
+	}
+}
+```
+
+
+
+
+
 
 
 
