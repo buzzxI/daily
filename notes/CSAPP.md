@@ -7292,7 +7292,7 @@ linux 内核使用三个相关的数据结构表示打开的文件
     >
     >   只有当 refernece count 为 0 的时候，内核才会删除 file table 对应 entry
 
-* v-node table：所有进程共享，每个 entry 可以认为是某个文件的 stat(metadata)
+* v-node table：所有进程共享，每个 entry 包含了一个文件 metadata 中的绝大部分信息
 
 
 下图给出了两个例子
