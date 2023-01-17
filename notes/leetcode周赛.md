@@ -7564,11 +7564,169 @@ class Solution {
 }
 ```
 
+# [第 328 场周赛](https://leetcode.cn/contest/weekly-contest-328/)
+
+## [6291. 数组元素和与数字和的绝对差](https://leetcode.cn/problems/difference-between-element-sum-and-digit-sum-of-an-array/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6291.png)
+
+签到题，直接模拟即可
+
+```java
+class Solution {
+    public int differenceOfSum(int[] nums) {
+        int sum = 0;
+        for (int num : nums) {
+            sum += num;
+            while (num != 0) {
+                sum -= num % 10;
+                num /= 10;
+            }
+        }
+        return sum;
+    }
+}
+```
+
+## [6292. 子矩阵元素加 1](https://leetcode.cn/problems/increment-submatrices-by-one/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6292.png)
+
+差分数组裸题，通过差分数组计算区间变化，然后通过对差分数组求前缀和，求出原数组，这里的难点在于这里的差分数组是二维的
+
+```java
+class Solution {
+    public int[][] rangeAddQueries(int n, int[][] queries) {
+        int[][] tmp = new int[n + 1][n + 1];
+        for (int[] q : queries) {
+            tmp[q[0]][q[1]]++;
+            tmp[q[0]][q[3] + 1]--;
+            tmp[q[2] + 1][q[1]]--;
+            tmp[q[2] + 1][q[3] + 1]++;
+        }
+        int[][] rst = new int[n][n];
+        rst[0][0] = tmp[0][0];
+        for (int i = 1; i < n; i++) rst[i][0] = rst[i - 1][0] + tmp[i][0];
+        for (int j = 1; j < n; j++) rst[0][j] = rst[0][j - 1] + tmp[0][j];
+        for (int i = 1; i < n; i++) {
+            for (int j = 1; j < n; j++) rst[i][j] = rst[i - 1][j] + rst[i][j - 1] - rst[i - 1][j - 1] + tmp[i][j];
+        }
+        return rst;
+    }
+}
+```
+
+原矩阵为差分矩阵的二维前缀和
+
+## [6293. 统计好子数组的数目](https://leetcode.cn/problems/count-the-number-of-good-subarrays/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6293.png)
+
+比赛的时候没看出来是双指针，我真服了，枚举右端点，然后找到第一个非法的左端点即可
+
+```java
+class Solution {
+    public long countGood(int[] nums, int k) {
+        long rst = 0;
+        int l = 0;
+        long cnt = 0;
+        // 维护合法的对数
+        Map<Integer, Integer> map = new HashMap<>();
+        for (int r = 0; r < nums.length; r++) {
+            int val = map.getOrDefault(nums[r], 0);
+            // 每个数字的加入，都会添加 freq[nums[i]] 个新数对
+            // 每个数字的离开，都会减少 freq[nums[i]] - 1 个老数对
+            cnt += val;
+            map.put(nums[r], val + 1);
+            while (cnt >= k) {
+                int v = map.get(nums[l]) - 1;
+                cnt -= v;
+                map.put(nums[l], v);
+                l++;
+            }
+            rst += l;
+        }
+        return rst;
+    }
+}
+```
+
+## [6294. 最大价值和与最小价值和的差值](https://leetcode.cn/problems/difference-between-maximum-and-minimum-price-sum/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6294.png)
+
+树形 dp，首先这个题开销被定义为最大和路径价值和最小路径价值的差，如果是最小路径的价值肯定就是只包含了一个节点的路径；因此这个题相当于求解整个数所有节点的最长路径的价值(不包含起点)
+
+直接转变为树形 dp 了，相当于找到所有节点在树中的最远节点，然后求解当前节点到最远节点的"价值"并将价值最大的返回
+
+因此这个题直接参考了[树的中心](./一些算法.md#树的中心)的做法，使用两次 DFS 第一次搜索某个节点子树中的最远节点和次远距离，第二次直接搜索某个节点的祖父节点中最远节点
+
+```java
+class Solution {
+    private int[] h;
+    private int[] e;
+    private int[] ne;
+    private int idx;
+    private long[] d1;
+    private long[] d2;
+    private int[] p;
+    private int[] price;
+    private long[] u;
+    public long maxOutput(int n, int[][] edges, int[] price) {
+        this.h = new int[n];
+        Arrays.fill(h, -1);
+        this.e = new int[n << 1];
+        this.ne = new int[n << 1];
+        this.idx = 0;
+        for (int[] es : edges) {
+            add(es[0], es[1]);
+            add(es[1], es[0]);
+        }
+        this.d1 = new long[n];
+        this.d2 = new long[n];
+        this.p = new int[n];
+        this.price = price;
+        this.u = new long[n];
+        dfs_d(0, -1);
+        dfs_u(0, -1);
+        long rst = 0;
+        for (int i = 0; i < n; i++) rst = Math.max(rst, Math.max(d1[i], u[i]));
+        return rst;
+    }
+
+    private long dfs_d(int n, int fa) {
+        for (int i = h[n]; i != -1; i = ne[i]) {
+            int j = e[i];
+            if (j == fa) continue;
+            long tmp = dfs_d(j, n);
+            if (tmp >= d1[n]) {
+                d2[n] = d1[n];
+                d1[n] = tmp;
+                p[n] = j;
+            } else if (tmp > d2[n]) d2[n] = tmp;
+        }
+        return d1[n] + price[n];
+    }
+
+    private void dfs_u(int n, int fa) {
+        for (int i = h[n]; i != -1; i = ne[i]) {
+            int j = e[i];
+            if (j == fa) continue;
+            if (p[n] == j) u[j] = Math.max(u[n], d2[n]);
+            else u[j] = Math.max(u[n], d1[n]);
+            u[j] += price[n];
+            dfs_u(j, n);
+        }
+    }
 
 
-
-
-
+    private void add(int a, int b) {
+        e[idx] = b;
+        ne[idx] = h[a];
+        h[a] = idx++;
+    }
+}
+```
 
 
 
