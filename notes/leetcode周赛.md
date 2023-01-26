@@ -438,41 +438,33 @@ class Solution {
 
 ![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/6134.png)
 
-这个图比较特殊，每个节点最多只具有一条出边，这意味着每个节点的出度最大是 1(然而这并不能说明什么，还是可能有环，但至少不会有交叉环)
+最暴力的做法是直接两次 dijkstra，然后遍历所有边，找到 max dis 的最小值，但这个图比较特殊，每个节点最多只具有一条出边，所以可以省去建图的环节，也正是因为只有一条出边，因此 BFS 和 DFS 是一样的，所以根本不需要借助堆找到最短边，DFS 找到的下一个点就是最短边
 
-我的策略是从一个节点开始，使用一个 map 记录路径上节点的距离(走一条链或环)，注意如果走到环的，走一圈就结束；
-
-然后从另一个 node 开始，使用 visited 数组记录访问到的节点，同时每轮查询当前走过的节点，在遍历 node1 的时候是否走过，如果走过的话，就维护并更新最后的结果
+因此借助数组两次 DFS 遍历，即可分别得到 dis 数组，然后遍历两个 dis 数组即可
 
 ```java
 class Solution {
+    private static final int INF = 0x3f3f3f3f;
     public int closestMeetingNode(int[] edges, int node1, int node2) {
-        if (node1 == node2) return node1;
-        int len = edges.length;
-        int[] map = new int[len];
-        Arrays.fill(map, -1);
-        int node = node1;
-        int dis = 0;
-        while (node != -1 && map[node] == -1) {
-            map[node] = dis++;
-            node = edges[node];
-        }
-        dis = 0;
+        int n = edges.length;
+        int[] dis1 = new int[n];
+        Arrays.fill(dis1, INF);
+        dis1[node1] = 0;
+        // 优雅的 for 循环，将所有的分支条件，更新，都写在循环内部了
+        // 注意到只有当前距离 d 小于 dis[ne] 时才会更新，这是为了避免环
+        for (int ne = edges[node1], d = 1; ne != -1 && d < dis1[ne]; dis1[ne] = d, ne = edges[ne], d++);
+        int[] dis2 = new int[n];
+        Arrays.fill(dis2, INF);
+        dis2[node2] = 0;
+        for (int ne = edges[node2], d = 1; ne != -1 && d < dis2[ne]; dis2[ne] = d, ne = edges[ne], d++);
+        int d = INF;
         int rst = -1;
-        int maxLen = Integer.MAX_VALUE;
-        node = node2;
-        int[] visited = new int[len];
-        while (node != -1 && visited[node] == 0) {
-            visited[node] = 1;
-            if (map[node] != -1) {
-                int max = Math.max(dis, map[node]);
-                if (rst == -1 || max < maxLen) {
-                    rst = node;
-                    maxLen = max;
-                } else if (max == maxLen && node < rst) rst = node;
+        for (int i = 0; i < n; i++) {
+            int max = Math.max(dis1[i], dis2[i]);
+            if (d > max) {
+                d = max;
+                rst = i;
             }
-            node = edges[node];
-            dis++;
         }
         return rst;
     }
