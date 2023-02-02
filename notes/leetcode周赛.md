@@ -7720,6 +7720,154 @@ class Solution {
 }
 ```
 
+# [第 330 场周赛](https://leetcode.cn/contest/weekly-contest-330/)
+
+很有含金量的周赛
+
+## [6337. 统计桌面上的不同数字](https://leetcode.cn/problems/count-distinct-numbers-on-board/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6337.png)
+
+条件太苛刻了，什么叫所有 x 满足了 x % i == 1 ?，居然还需要等待 $10^9$ 天
+
+找不到规律，直接模拟，一轮前后，只要没有新增的数字，就返回
+
+```java
+class Solution {
+    public int distinctIntegers(int n) {
+        Set<Integer> set = new HashSet<>();
+        set.add(n);
+        while (true) {
+            Set<Integer> tmp = new HashSet<>(set);
+            for (int x : set) {
+                for (int i = 1; i <= n; i++) {
+                    if (x % i == 1) tmp.add(i);
+                }
+            }
+            if (tmp.size() == set.size()) break;
+            set.addAll(tmp);
+        }
+        return set.size();
+    }
+}
+```
+
+但其实这个题，其实有个更好的思路，对于任意大于 1 的数字 n，一定有 n % (n - 1) = 1，即一轮中可能有很多个数字被加入进来，但 n - 1 一定会被加入进来，尽管需要模拟 $10^9$ 轮次，其实最多模拟 100 天就结束了，因此直接返回 n - 1 即可
+
+但要注意的是，1 比较特殊，需要特判
+
+```java
+class Solution {
+    public int distinctIntegers(int n) {
+        if (n == 1) return 1;
+        return n - 1;
+    }
+}
+```
+
+## [6338. 猴子碰撞的方法数](https://leetcode.cn/problems/count-collisions-of-monkeys-on-a-polygon/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6338.png)
+
+其实是数学题，求 $2^n - 2$，这不过这个 n 很大，取到了 $10^9$ 所以需要取模，注意到如果是加法乘法取模的话，不影响顺序，但减法取模的时候需要补齐保证堆正数进行取模运算
+
+```java
+class Solution {
+    private static final int MOD = (int)1e9 + 7;
+    public int monkeyMove(int n) {
+        long base = 2;
+        long rst = 1;
+        while (n != 0) {
+            if ((n & 1) == 1) rst *= base;
+            base *= base;
+            n >>= 1;
+            rst %= MOD;
+            base %= MOD;
+        }
+        // 一定要 rst + MOD 后再 -2，不然可能出现负数
+        return (int)((rst + MOD - 2) % MOD);
+    }
+}
+```
+
+## [6339. 将珠子放入背包中](https://leetcode.cn/problems/put-marbles-in-bags/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6339.png)
+
+思维题，这个题比赛的时候确实没想到
+
+翻译一下就是将整个数组分为 k 个连续的子数组，每个子数组的价值仅和边界和有关，因此考虑的时候仅考虑边界即可
+
+完成分割后数组中的任意元素必定属于某个子数组，因此边界一定是成对出现的，考虑如果 nums[i] 为某个子数组的结尾，那么 nums[i + 1] 一定是下一个子数组的开头
+
+只要找到 k - 1 个 nums[i] 和 nums[i + 1] 这样的数对，即完成了分割(因为开头和结尾必定是第一个子数组和最后一个子数组的边界)
+
+所以枚举所有的数对，然后取前 k - 1 个最小的，就是最小价值，前 k - 1 个最大的，就是最大价值，做差即可
+
+```java
+class Solution {
+    public long putMarbles(int[] weights, int k) {
+        int n = weights.length;
+        // 最多具有 n - 1 个数对
+        int[] nums = new int[n - 1];
+        for (int i = 0; i < n - 1; i++) nums[i] = weights[i] + weights[i + 1];
+        // 排序后前 k - 1 个就是最小的，后 k - 1 个就是最大的
+        Arrays.sort(nums);
+        long rst = 0;
+        for (int i = 0, j = n - 2, idx = 0; idx < k - 1; idx++, i++, j--) rst += nums[j] - nums[i];
+        return rst;
+    }
+}
+```
+
+## [6340. 统计上升四元组](https://leetcode.cn/problems/count-increasing-quadruplets/)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/6340.png)
+
+本题的精髓在于枚举的是 j 和 k，而不是 i 和 l
+
+对于 i < j < k < l 的四元组，需要有 nums[i] < nums[k] < nums[j] < nums[l]
+
+当枚举到合法的 j 和 k 的时候，一定有 nums[j] > nums[k]，此时如果在 j **前面**具有 a 个小于 nums[k] 的位置，而在 k **后面**具有 b 个大于 nums[j] 的位置，显然此时具有 a * b 个解
+
+枚举位置 j 和 k 的时间复杂度为 $O(n^2)$，如果可以在 $O(1)$ 的时间内求出每个 a 和 b，那么整体时间复杂度为 $O(n^2)$ 在输入大小为 4000 的情况下，肯定是可以过的
+
+这里采用类似前缀和，后缀和的方式预处理得到 a 和 b
+
+```java
+class Solution {
+    public long countQuadruplets(int[] nums) {
+        int n = nums.length;
+        // g[i][j] 表示在 i 之后，具有多少个比 nums[j] 更大的数(类似后缀和)
+        int[][] g = new int[n][n];
+        // l[i][j] 表示在 i 之前，具有多少个比 nums[j] 更小的数(类似前缀和)
+        int[][] l = new int[n][n];
+        for (int i = 1; i < n; i++) {
+            for (int j = i + 1; j < n; j++) {
+                l[i][j] = l[i - 1][j];
+                if (nums[i - 1] < nums[j]) l[i][j]++;
+            }
+        }
+        for (int i = n - 2; i >= 0; i--) {
+            for (int j = i - 1; j >= 0; j--) {
+                g[i][j] = g[i + 1][j];
+                if (nums[i + 1] > nums[j]) g[i][j]++;
+            }
+        }
+        long rst = 0;
+        for (int i = 1; i < n - 2; i++) {
+            for (int j = i + 1; j < n; j++) {
+                if (nums[j] >= nums[i]) continue;
+                rst += (long)(l[i][j]) * g[j][i];
+            }
+        }
+        return rst;
+    }
+}
+```
+
+
+
 
 
 
