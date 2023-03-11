@@ -8657,7 +8657,861 @@ void sweep(ptr b, ptr end) {
 
 所以这里假设所有的入参均为一个地址，至于如何找到 header，可以通过在内部维护一个线段树实现，线段树保存的是一个范围，表示该范围内是否存在 block，最顶层节点维护的是整个堆的 block 信息，如果 ptr 落在了某个节点的 left 和 right 之间，那么 ptr 一定属于一个 block(left)
 
+## malloc-lab
 
+### 写在前面
+
+有史以来，耗时最长的 lab，代码写了 3 天，然而 debug 用了三周，尽管最终的成绩并不高，但能够调出一个没有 bug 的版本已经太费劲了，不改进了
+
+过程还是类似的从[官网](http://csapp.cs.cmu.edu/3e/labs.html)找到相关的 tar 包，这次需要修改的对象是 mm.c
+
+做实验之前一定先看看这个实验的 [Writeup](http://csapp.cs.cmu.edu/3e/malloclab.pdf) 很重要
+
+在我做实验的时间 23/2~3 的时候已经没有提供完成的 trace 文件了，后来在 github 上找到了一份 [CSAPP-Labs/yzf-malloclab-handout/traces at master · Ethan-Yan27/CSAPP-Labs](https://github.com/Ethan-Yan27/CSAPP-Labs/tree/master/yzf-malloclab-handout/traces)
+
+直接将这个 trace 目录放进项目里面还不能用，还需要修改 config.h，修改 TRACEDIR 的定义为 "./traces"
+
+这个实验，正常人就不要想着一遍能过了，老老实实把 gdb 的 [文档](https://www.sourceware.org/gdb/documentation/) 看看，肯定是要调试的
+
+>   建议直接看网页版，如果下成 pdf 的话还挺慢的
+
+### 如何实现
+
+简单来说整个 mm.c 只需要实现 4 个函数:
+
+*   mm_init: "堆"的初始化函数
+*   mm_malloc: 含义和 malloc 完全一致
+*   mm_free: 含义和 free 完全一致
+*   mm_realloc: 含义和 realloc 完全一致
+
+~~所以malloc-lab 可以认为是造轮子~~
+
+这个实验实现的是一个 allocator，csapp 原书花了很多的篇幅以 implicit free list 为例，讲述了 allocator 的设计，从渐进式的角度考虑，该 lab 也应该先实现一个基础的 implicit free list 的版本，然而我做的时候上来就写了 segregated free list 的版本，然后就调试了三周 :sob:，果真应该循序渐进的
+
+在我实现的版本中 free block 具有如下格式:
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/03/11/16:56:02:segregated_free_list_block-Page-1.drawio.svg)
+
+因为所有的 block 都是 8 个字节对齐的，因此 block size 肯定是 8 的倍数，这样使用 32 bit 存储 block size 就有点浪费了，因此这里按照之前讲过的，最低位表示当前 block 是否已经分配了，次低位表示前一个 block 是否分配了，最开始的 29 bit 表示 block 的大小
+
+因为使用 list 存储，放在了链表中，为了高效的实现链接和删除，因此这里使用的是双向链表，在 x86_64 上地址是 64 bit 的，因此使用 8 Bytes 存储地址
+
+>   然而 intel 并没有真的使用 64 位的地址，只有低 48 bit 用来了编址，高 16 bit 如果全是 0 的话表示访问的是用户应用程序使用的内存地址，如果全是 1 的话表示访问的是内核程序使用的内存地址
+>
+>   所以其实 6 Bytes 就可以存储地址了，这也是一个优化的地方，即使用 6 Bytes 存储数据，然而在实际操作的时候并没有哪个数据类型是 6 Bytes 的，实际可能需要分为高 16 bit 和低 32 bit 分别存储数据，写起来更容易出错
+
+free block 的 footer 和 header 完全一致，由于 footer 和 pre block's allocation bit 的存在，allocated 的 block 只需要保存一个 header 即可，提高了内存利用率
+
+对于 free block 而言 padding 的大小无关紧要，也就是说就算 padding 大小是 0 也没关系，如果想要理解这一点，最好再看看 allocated block 的格式:
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/03/11/16:56:10:segregated_free_list_block-Page-2.drawio.svg)
+
+allocated block 只有一个 header，free block 中的 previous block, next block, footer 都成为了新 padding 的一部分, 因此就算 free block 的 padding 大小为 0，那么分配的时候至少可以分配 12 个字节的空间
+
+在 memlib.c 中进行了内存的初始化，这里定义了整个实验使用的堆大小为 20MB，如果使用 2 的各个幂次进行 segregated free list 的分类的话，那么其实只需要 24 个列表，其中最后一个列表 list[24] 中保存的是大小大于等于 16 MB ($2^{24}$) 的所有 block
+
+整个"堆"和 csapp 原书中讲的类似，使用了一个 prologue block 和 epilogue block 作为边界，定义的时候将这两个 block 大小定义为 0，并将 allocation bit 设置为 1 作为标识
+
+所以"堆"在内存中具有如下的结构:
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/03/11/17:19:52:segregated_free_list_block-Page-3.drawio.svg)
+
+其他的关于 split block，coalesce block，原理上和 csapp 原书中讲的基本一致，这个实验原理还是比较清晰的，就是实现的时候因此需要操作指针和链表，稍微不注意可能就出错
+
+### functions
+
+后面具体说到某个 function 的实现的时候使用的都是 DFS 的方式，即一条函数走到头，这样也许思路会清晰一点
+
+#### 常量的定义
+
+```c
+#define MIN_UNIT 4
+/* address length(6 Bytes is enough) */
+#define ADD_LEN 8
+/* single word (4) or double word (8) alignment */
+#define ALIGNMENT 8
+/* max list size 2^{24}(16MB) */
+#define LIST_SIZE 25
+/* minimum request block size */
+#define MIN_CHUNK 1 << 12
+/* every block(allocated/freed) should be larger than 24 Bytes */
+#define MIN_BLOCK 24
+/* illegal address */
+#define NULL_ADD 0
+
+typedef unsigned long long ULL;
+typedef unsigned int UI;
+
+/* segregated list */
+static ULL list[LIST_SIZE];
+/* points to the first block of heap */
+static char* heapp;
+```
+
+基本的介绍其实注释已经标注的很明白了，注意到 MIN_CHUNCK 会被用在 extend_heap 中，也即每次扩展"堆"的时候最小扩展 4KB
+
+此外因为需要对链表进行 4 字节和 8 字节的操作所以定义了 ULL 和 UI
+
+#### mm_init
+
+```c
+int mm_init(void)
+{
+    // create prologue block and epilogue block 
+    if ((heapp = mem_sbrk(2 * MIN_UNIT)) == (void*)-1) return -1;
+    // mark prologue block
+    pack(heapp, 0, 0, 1);
+    // mark epilogue block
+    pack(heapp + MIN_UNIT, 0, 1, 1);
+    int i;
+    // initialize segregated list
+    for (i = 0; i < LIST_SIZE; i++) list[i] = NULL_ADD;
+    extend_heap(MIN_CHUNK);
+    return 0;
+}
+```
+
+初始化 prologue block 和 epilogue block，这两个 block 的主要作用是占位符，因此大小都是 0，且 allocation bit 为 1
+
+然后初始化 segregated free list，即将让 list 的每一项指向 NULL，表示当前大小的 list 中不存在任何空闲的 block
+
+按理来说应该把 extend_heap 的操作推迟到第一次分配内存才进行的，不过因为在 trace 文件中进行的 allocate 和 free 操作实在是太多了，所以这种用户体验级别上的优化已经不重要了
+
+要注意的是 extend_heap 第一次扩容的大小恰好就是 MIN_CHUNCK(4KB)
+
+这里调用的自定义函数只有 [pack](#pack) 和 [extend_heap](#extend_heap)
+
+#### pack
+
+就是一个简单的将某个指针处的四个字节进行封装
+
+```c
+/* pack the header with specific value */
+static void pack(void* header, UI block_size, int pre, int cur) {
+    *(UI*)header = block_size | (pre & 1) << 1 | (cur & 1);
+}
+```
+
+#### extend_heap
+
+这个函数用来扩展当前的堆区
+
+```c
+/**
+ * extend heap with a block at least @param:size Bytes
+ * heap will extend at least MIN_CHUNK(4K) Bytes
+ * @returns header of new block 
+*/
+static void* extend_heap(size_t size) {
+    if (size < MIN_CHUNK) size = MIN_CHUNK;
+    // size round up to align 8 Bytes
+    size = round_up_size(size);
+    void* p;
+    if ((p = mem_sbrk(size)) == (void*)-1) return NULL;
+    // extend heap will request a new block at the top of heap
+    // thus we need to exterminate old and create new epilogue block
+    void* header = p - MIN_UNIT;
+    // clear current block's allocation bits
+    *(UI*)header &= ~1;
+    // rebuild header and footer
+    rebuild_hf(header, size);
+    // rebuild epilogue block
+    pack(header + size, 0, 0, 1);
+    // try to coalese new block with front block 
+    header = coalesce(header);
+    link_to_list(header);
+    // clear epilogue block's pre block allocation bit
+    size = block_size(header);
+    *(UI*)(header + size) &= ~2;
+    return header;
+}
+```
+
+这个函数首先会校验参数 @param: size 的大小保证其一定不小于 4KB，然后调用 [round_up_size](#round_up_size) 进行大小对齐
+
+要注意的是因为需要扩展堆，因此 epilogue block 会先被清除掉并重写为新 block 的头部，而构造好新 block 后会重建 epilogue block，这里的行为和之前在 implicit free list 中相同
+
+对于一个新的 free block 首先应该 rebuild 其 header 和 footer，这意味着 header 的 size 字段，allocation 字段都需要修改，但要注意 **header 中的 previous block allocation bit 应该保留下来**，这里相关的函数是 [rebuild_hf](#rebuild_hf&new_size)
+
+extend_heap 的行为必然会申请得到一个 free_block 在我的 allocator 的设计中，考虑只要出现了 free block 就尝试进行前后 block 的 [coalesce](#coalesce) 操作，这里也不例外，这不过因为这里 coalesce 操作主要是要合并前面的可能出现的空闲的 block，这里一定要注意，**先 rebuild epilogue block 然后再进行 coalesce**，否则 coalesce 操作就是不受控制的
+
+要注意的是 coalesce 后的 block 并没有放回到 segeregated free list 中，还需要调用函数 [link_to_list](#link_to_list) 主动的将其链接到正确的 list 中
+
+extend_heap 之后得到了一个 free block，当前 block 状态确定为 free，需要显式修改 epilogue block 的 previous block allocation bit
+
+#### round_up_size
+
+根据 8 个字节的对齐要求对 size 向上取整
+
+```c
+static UI round_up_size(UI size) {
+    return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
+}
+```
+
+#### rebuild_hf&new_size
+
+这里的函数 rebuild_hf 仅仅是根据 size 重建一个 header，然后再将 header 原封不动的复制到 footer，注意这个顺序一定不能改变，因为 size 会决定 footer 的位置，所有后面所有涉及到修改 header 和 footer 的操作的时候都应该先修改 header
+
+```c
+/**
+ * assign free block new size
+ * typically new size is larger than old one
+ * only size changes, control bit remains
+*/
+static void new_size(void* header, UI size) {
+    *(UI*)header &= 0x7;
+    *(UI*)header |= size;
+}
+
+/**
+ * use @param: size to rebuild header and footer
+ * @param:size will not modify block's control bits
+ * rebuild_hf will make sure new header and footer are identical
+*/
+static void rebuild_hf(void* header, UI size) {
+    new_size(header, size);
+    // rebuild footer
+    pack(get_footer(header), size, (*(UI*)header & 0x2) >> 1, *(UI*)header & 0x1);
+}
+```
+
+#### coalesce
+
+coalesce 操作可以合并当前 block 前后空闲的 block(这里已经默认的当前 block 为 free 状态)
+
+```c
+/**
+ * coalesce current free block with physical pre and succ free blocks
+ * @return new header
+*/
+static void* coalesce(void* header) {
+    UI size = block_size(header);
+    void* ne = header + size;
+    // if next block is free block
+    if (!(*(UI*)ne & 0x1)) {
+        size += block_size(ne);
+        detach_off(ne);
+    }
+    // if pre block is free block
+    if (!((*(UI*)header >> 1) & 0x1)) {
+        UI pre_size =  block_size(header - MIN_UNIT);
+        void* pre = header - pre_size;
+        size += pre_size;
+        detach_off(pre);
+        header = pre;
+    }
+    // clear current block's allocation bit
+    *(UI*)header &= ~1;
+    rebuild_hf(header, size);
+    // clear next block's pre block allocation bit
+    *(UI*)(header + size) &= ~2;
+    return header;
+}
+```
+
+因为有 pre block allocation bit 的存在，直接查询本 header 就可以直到前一个 block 的占用情况了，而至于后面的 block 还是需要根据当前 block 的 size 和 header 确定后一个 block 的位置才可以
+
+具体的发现前面的或者后面的 block 是空闲的，那么此时应该做的第一件事是将对应 free block 从其 segregated free list 中取下来，然后在将对应的 block 的大小累加到合并后的 block 大小中，要注意的是**如果前一个 block 是空闲的，那么合并之后 header 需要修改**
+
+coalesce 操作需要完成 block 的合并，这意味着合并后的 block 其具有正常的 header 和 footer，因此最后不要忘了使用修改新 header 的 block size 和 header 中的 allocation bit，还是类似的，**修改 header 的时候不要修改 previous block’s allocation bit，此外需要将 header 复制一份给 footer**
+
+coalesce 中神奇的 [detach_off](#detach_off) 函数会将某个空闲 block 从 segregated free list 中释放
+
+#### detach_off
+
+detach_off 会将对应的 free block 从 segregated free list 中删除
+
+```c
+/**
+ * detach current free block from segregated free list
+*/
+static void detach_off(void* header) {
+    UI size = block_size(header);
+    int idx = high_bit(size);
+    ULL pre = *(ULL*)(header + MIN_UNIT);
+    ULL ne = *(ULL*)(header + MIN_UNIT + ADD_LEN);
+    if (pre == NULL_ADD && ne == NULL_ADD) list[idx] = NULL_ADD;
+    else {
+        if (ne != NULL_ADD) {
+            *(ULL*)(ne + MIN_UNIT) = pre;
+            if (pre == NULL_ADD) list[idx] = ne;
+        }
+        if (pre != NULL_ADD) *(ULL*)(pre + MIN_UNIT + ADD_LEN) = ne;
+    }
+}
+```
+
+因为是双向链表，因此删除 block 的操作在 O(1) 内就可以完成，不过需要注意的是需要考虑当前 block 是否为对应 list 中的 header 节点的情况，为了提高内存利用率，可以看到 list 中是不存在所谓的 "prologue block" 和 "epilogue block" 的，因此 list 全需要依靠其取值是否为 NULL_ADD 判断是否已经遍历到 list 结尾
+
+如果当前待删的 block 位于 list 的首部，那么需要正确的将 list 首部更新为 block 的下一个 block
+
+这里可以看到 list 的下标计算函数 [high_bit](#high_bit)，这个函数是用来计算当前 free block 所在的 list 信息的
+
+#### high_bit
+
+这个函数名其实就是这个函数的意思，返回当前数字在二进制形式中的最高位，返回值在二进制中的下标即为其在 list 中的下标，如果参数 size 为 10 那么返回的就是 3
+
+```c
+/* bit wise trick */
+/* arrays used by high_bit */
+const static UI b[] = {0x2, 0xc, 0xf0, 0xff00, 0xffff0000};
+const static int s[] = {1, 2, 4, 8, 16};
+/* round down to log @param:size(2 based) */
+static int high_bit(UI val) {
+    int i, bit = 0;
+    for (i = 4; i >= 0; i--) {
+        if (val & b[i]) {
+            val >>= s[i];
+            bit |= s[i];
+        }
+    }
+    return bit;
+}
+```
+
+这里的函数实现直接参考了 [Bit Twiddling Hacks](http://graphics.stanford.edu/~seander/bithacks.html#IntegerLog) 这里介绍了各种 bit trick，日常能用到的基本上都有
+
+#### link_to_list
+
+这个函数用来将某个 free block 链接到正确的 segregated free list 中
+
+```c
+/**
+ * add free block with @param: header to free list
+*/
+static void link_to_list(void* header) {
+    int size = block_size(header);
+    // find suitable list
+    int idx = high_bit(size);
+    *(ULL*)(header + MIN_UNIT) = NULL_ADD;
+    // link free block to segregated list
+    *(ULL*)(header + MIN_UNIT + ADD_LEN) = list[idx];
+    if (list[idx] != NULL_ADD) *(ULL*)(list[idx] + MIN_UNIT) = (ULL)header;
+    // link current block to list
+    list[idx] = (ULL)header;
+}
+```
+
+这里直接将 block 放置在了 list 的首部，因此整个放置操作很简单，就是直接和 list[idx] 链接上就行，因为放在首部的原因需要修改 list 的首部为新的 block
+
+#### mm_malloc
+
+终于到了第二个需要实现的函数
+
+```c
+/**
+ * mm_malloc - Allocate a block by incrementing the brk pointer.
+ *     Always allocate a block whose size is a multiple of the alignment.
+*/
+void *mm_malloc(size_t size)
+{
+    if (size == 0) return NULL;
+    // every allocated block has a header with 4 Bytes
+    size += MIN_UNIT;
+    size = round_up_size(size);
+    if (size < MIN_BLOCK) size = MIN_BLOCK;
+    int idx;
+    for (idx = high_bit(size); idx < LIST_SIZE; idx++) {
+        ULL header;
+        for (header = list[idx]; header != NULL_ADD; header = *(ULL*)(header + MIN_UNIT + ADD_LEN)) {
+            UI tmp_size = block_size((void*)header);
+            if (tmp_size >= size) return allocate_block((void*)header, size);
+        }
+    }
+    void* header = extend_heap(size);
+    if (header == NULL) return NULL;
+    return allocate_block(header, size);
+}
+```
+
+其实这个函数的实现也是很简单的，这里使用 first fit 找到第一个合适的 block 进行分配，尽管内存空间利用率上不如 best fit(毕竟可能涉及到 split_block)，但是快啊
+
+如果遍历完全部的 list 也找达不到一个合适的 block 就申请 extend_heap
+
+如果找到了一个 block，直接调用 [allocate_block](#allocate_block) 进行分配
+
+#### allocate_block
+
+```c
+/**
+ * allocate a free block
+ * physically, a free block may much larger than @param: size Bytes, free block may be splitted
+ * allocate_block returns a pointer which points to the first byte in free block
+*/
+static void* allocate_block(void* header, size_t size) {
+    *(UI*)header |= 1;
+    detach_off(header);
+    UI ori_size = block_size(header);
+    // if remaining space is larger than 24 Bytes(minimum cost of free block)
+    // then we should split the block
+    if (ori_size - size >= 24) split_block(header, size);
+    // set next block's pre block allocation bit
+    else *(UI*)(header + ori_size) |= 2;
+    return header + MIN_UNIT;
+}
+```
+
+allocate_block 并不是无脑直接分配 block，如果当前 block 剩余的空间太大了(不小于 24 个字节), 那么可以将当前 block 拆分为两个 block，以供后面使用，这种 [split_block](#split_block) 的操作其实也是变相的减少了内部碎片
+
+要注意的因为进行了一次 allocation，不仅要修改当前 block 的 allocation bit 还需要修改后面 block 的 previous block allocation bit
+
+#### split_block
+
+因为只有在分配 block 的时候才有可能分割 block，因此这里假设 split 之后的前一个 block 是被分配的，而后面的 block 是空闲的
+
+```c
+/**
+ * split original block with the first block has size @param: size
+ * the first block will be considered as allocated block
+ * the second block will be initialized as free block
+ * after splitting a free block, split_block will call coalesce
+ * to merge the second free block and the next free block(if present)
+*/
+static void split_block(void* header, UI size) {
+    // rebuild first block's header
+    UI ori_size = block_size(header);
+    new_size(header, size);
+    UI ne_size = ori_size - size;
+    void* ne = header + size;
+    *(UI*)(ne) |= 0x2;
+    *(UI*)(ne) &= ~0x1;
+    // rebuild next block's header and footer
+    rebuild_hf(ne, ne_size);
+    ne = coalesce(ne);
+    link_to_list(ne);
+    // clear next block's pre block allocation bit
+    *(UI*)(ne + ne_size) &= ~0x2;
+}
+```
+
+因为分割后得到了一个 free block，因此第一件事就是 rebuild header 和 footer 并尝试进行 block 合并最后不要忘了将 block 重新链接到 segregated free list 中
+
+当前 block 的状态为 free 需要显式的修改后一个 block 的 previous block allocation bit
+
+#### mm_free
+
+其实有了之前的 API，free 操作变得简单了，直接合并后放入对应 segregated free list 即可，这里也需要注意，当前 block 的状态是确定的，因此需要显式的修改后面 block 的 previous block allocation bit
+
+```c
+/*
+ * mm_free - Freeing a block does nothing.
+ */
+void mm_free(void *ptr)
+{
+    // coalesce block immediately
+    void* header = coalesce(ptr - MIN_UNIT);
+    // link free block to segregated free list
+    link_to_list(header);
+    // clear next block's pre block allocation bit
+    UI size = block_size(header);
+    *(UI*)(header + size) &= ~2;
+}
+```
+
+#### mm_realloc
+
+在实现 mm_realloc 的时候一定要看好最开始提到的  [Writeup](http://csapp.cs.cmu.edu/3e/malloclab.pdf)，它明确了 mm_realloc 在各种非法参数下的含义
+
+```c
+/*
+ * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
+ */
+void *mm_realloc(void *ptr, size_t size)
+{
+    if (ptr == NULL) return mm_malloc(size);
+    if (size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
+    UI request_size = size + MIN_UNIT;
+    request_size = round_up_size(request_size);
+    void* header = ptr - MIN_UNIT;
+    UI ori_size = block_size(header);
+    // if original block is big enough, then we may want to return original block immediately
+    // however we should check block size first, if @param:size is much smaller than block size
+    // then we should split original block
+    if (ori_size >= request_size) {
+        if (ori_size - request_size >= 24) split_block(header, request_size);
+        return ptr;
+    } else {
+        void* ne_block = mm_malloc(size);
+        memcpy(ne_block, ptr, ori_size - MIN_UNIT);
+        mm_free(ptr);
+        return ne_block;
+    }
+}
+```
+
+### all in one
+
+```c
+/*
+ * mm-naive.c - The fastest, least memory-efficient malloc package.
+ * 
+ * In this naive approach, a block is allocated by simply incrementing
+ * the brk pointer.  A block is pure payload. There are no headers or
+ * footers.  Blocks are never coalesced or reused. Realloc is
+ * implemented directly using mm_malloc and mm_free.
+ *
+ * NOTE TO STUDENTS: Replace this header comment with your own header
+ * comment that gives a high level description of your solution.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <unistd.h>
+#include <string.h>
+
+#include "mm.h"
+#include "memlib.h"
+
+/*********************************************************
+ * NOTE TO STUDENTS: Before you do anything else, please
+ * provide your team information in the following struct.
+ ********************************************************/
+team_t team = {
+    /* Team name */
+    "ateam",
+    /* First member's full name */
+    "Harry Bovik",
+    /* First member's email address */
+    "bovik@cs.cmu.edu",
+    /* Second member's full name (leave blank if none) */
+    "",
+    /* Second member's email address (leave blank if none) */
+    ""
+};
+
+#define MIN_UNIT 4
+/* address length(6 Bytes is enough) */
+#define ADD_LEN 8
+/* single word (4) or double word (8) alignment */
+#define ALIGNMENT 8
+/* rounds up to the nearest multiple of ALIGNMENT */
+#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
+/* max list size 2^{24}(16MB) */
+#define LIST_SIZE 25
+/* minimum request block size */
+#define MIN_CHUNK 1 << 12
+/* every block(allocated/freed) should be larger than 24 Bytes */
+#define MIN_BLOCK 24
+/* illegal address */
+#define NULL_ADD 0
+
+typedef unsigned long long ULL;
+typedef unsigned int UI;
+
+/* segregated list */
+static ULL list[LIST_SIZE];
+/* points to the first block of heap */
+static char* heapp;
+static char* end;
+/* arrays used by high_bit */
+const static UI b[] = {0x2, 0xc, 0xf0, 0xff00, 0xffff0000};
+const static int s[] = {1, 2, 4, 8, 16};
+/* helper functions */
+static int high_bit(UI val);
+static UI block_size(void* header);
+static void* extend_heap(size_t size);
+static void pack(void* header, UI block_size, int pre, int cur);
+static void new_size(void* header, UI size);
+static void rebuild_hf(void* header, UI size);
+static void* get_footer(void* header);
+static void* coalesce(void* header);
+static void detach_off(void* header);
+static void* allocate_block(void* header, size_t size);
+static void split_block(void* header, UI block_size);
+static UI round_up_size(UI size);
+static void link_to_list(void* header);
+int a_hits = 0;
+int f_hits = 0;
+
+/**
+ * mm_init - initialize the malloc package.
+ * prologue block and epilogue block are 4 Bytes, they are marked with block size zero
+ * prologue block begins from the heap, every list has an epilogue block
+*/
+int mm_init(void)
+{
+    // create prologue block and epilogue block 
+    if ((heapp = mem_sbrk(2 * MIN_UNIT)) == (void*)-1) return -1;
+    // mark prologue block
+    pack(heapp, 0, 0, 1);
+    // mark epilogue block
+    pack(heapp + MIN_UNIT, 0, 1, 1);
+    int i;
+    // initialize segregated list
+    for (i = 0; i < LIST_SIZE; i++) list[i] = NULL_ADD;
+    extend_heap(MIN_CHUNK);
+    return 0;
+}
+
+/**
+ * mm_malloc - Allocate a block by incrementing the brk pointer.
+ *     Always allocate a block whose size is a multiple of the alignment.
+*/
+void *mm_malloc(size_t size)
+{
+    if (size == 0) return NULL;
+    // every allocated block has a header with 4 Bytes
+    size += MIN_UNIT;
+    size = round_up_size(size);
+    if (size < MIN_BLOCK) size = MIN_BLOCK;
+    int idx;
+    for (idx = high_bit(size); idx < LIST_SIZE; idx++) {
+        ULL header;
+        for (header = list[idx]; header != NULL_ADD; header = *(ULL*)(header + MIN_UNIT + ADD_LEN)) {
+            UI tmp_size = block_size((void*)header);
+            if (tmp_size >= size) return allocate_block((void*)header, size);
+        }
+    }
+    void* header = extend_heap(size);
+    if (header == NULL) return NULL;
+    return allocate_block(header, size);
+    
+}
+
+/*
+ * mm_free - Freeing a block does nothing.
+ */
+void mm_free(void *ptr)
+{
+    // coalesce block immediately
+    void* header = coalesce(ptr - MIN_UNIT);
+    // link free block to segregated free list
+    link_to_list(header);
+    // clear next block's pre block allocation bit
+    UI size = block_size(header);
+    *(UI*)(header + size) &= ~2;
+}
+
+/*
+ * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
+ */
+void *mm_realloc(void *ptr, size_t size)
+{
+    if (ptr == NULL) return mm_malloc(size);
+    if (size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
+    UI request_size = size + MIN_UNIT;
+    request_size = round_up_size(request_size);
+    void* header = ptr - MIN_UNIT;
+    UI ori_size = block_size(header);
+    // if original block is big enough, then we may want to return original block immediately
+    // however we should check block size first, if @param:size is much smaller than block size
+    // then we should split original block
+    if (ori_size >= request_size) {
+        if (ori_size - request_size >= 24) split_block(header, request_size);
+        return ptr;
+    } else {
+        void* ne_block = mm_malloc(size);
+        memcpy(ne_block, ptr, ori_size - MIN_UNIT);
+        mm_free(ptr);
+        return ne_block;
+    }
+}
+
+/**
+ * extend heap with a block at least @param:size Bytes
+ * heap will extend at least MIN_CHUNK(4K) Bytes
+ * @returns header of new block 
+*/
+static void* extend_heap(size_t size) {
+    if (size < MIN_CHUNK) size = MIN_CHUNK;
+    // size round up to align 8 Bytes
+    size = round_up_size(size);
+    void* p;
+    if ((p = mem_sbrk(size)) == (void*)-1) return NULL;
+    // extend heap will request a new block at the top of heap
+    // thus we need to exterminate old and create new epilogue block
+    void* header = p - MIN_UNIT;
+    // clear current block's allocation bits
+    *(UI*)header &= ~1;
+    // rebuild header and footer
+    rebuild_hf(header, size);
+    // rebuild epilogue block
+    pack(header + size, 0, 0, 1);
+    // try to coalese new block with front block 
+    header = coalesce(header);
+    link_to_list(header);
+    // clear epilogue block's pre block allocation bit
+    size = block_size(header);
+    *(UI*)(header + size) &= ~2;
+    return header;
+}
+
+/**
+ * coalesce current free block with physical pre and succ free blocks
+ * @return new header
+*/
+static void* coalesce(void* header) {
+    UI size = block_size(header);
+    void* ne = header + size;
+    // if next block is free block
+    if (!(*(UI*)ne & 0x1)) {
+        size += block_size(ne);
+        detach_off(ne);
+    }
+    // if pre block is free block
+    if (!((*(UI*)header >> 1) & 0x1)) {
+        UI pre_size =  block_size(header - MIN_UNIT);
+        void* pre = header - pre_size;
+        size += pre_size;
+        detach_off(pre);
+        header = pre;
+    }
+    // clear current block's allocation bit
+    *(UI*)header &= ~1;
+    rebuild_hf(header, size);
+    // clear next block's pre block allocation bit
+    *(UI*)(header + size) &= ~2;
+    return header;
+}
+
+/**
+ * allocate a free block
+ * physically, a free block may much larger than @param: size Bytes, free block may be splitted
+ * allocate_block returns a pointer which points to the first byte in free block
+*/
+static void* allocate_block(void* header, size_t size) {
+    *(UI*)header |= 1;
+    detach_off(header);
+    UI ori_size = block_size(header);
+    // if remaining space is larger than 24 Bytes(minimum cost of free block)
+    // then we should split the block
+    if (ori_size - size >= 24) split_block(header, size);
+    // set next block's pre block allocation bit
+    else *(UI*)(header + ori_size) |= 2;
+    return header + MIN_UNIT;
+}
+
+/**
+ * split original block with the first block has size @param: size
+ * the first block will be considered as allocated block
+ * the second block will be initialized as free block
+ * after splitting a free block, split_block will call coalesce
+ * to merge the second free block and the next free block(if present)
+*/
+static void split_block(void* header, UI size) {
+    // rebuild first block's header
+    UI ori_size = block_size(header);
+    new_size(header, size);
+    UI ne_size = ori_size - size;
+    void* ne = header + size;
+    *(UI*)(ne) |= 0x2;
+    *(UI*)(ne) &= ~0x1;
+    // rebuild next block's header and footer
+    rebuild_hf(ne, ne_size);
+    ne = coalesce(ne);
+    link_to_list(ne);
+    // clear next block's pre block allocation bit
+    *(UI*)(ne + ne_size) &= ~0x2;
+}
+
+/**
+ * add free block with @param: header to free list
+*/
+static void link_to_list(void* header) {
+    int size = block_size(header);
+    // find suitable list
+    int idx = high_bit(size);
+    *(ULL*)(header + MIN_UNIT) = NULL_ADD;
+    // link free block to segregated list
+    *(ULL*)(header + MIN_UNIT + ADD_LEN) = list[idx];
+    if (list[idx] != NULL_ADD) *(ULL*)(list[idx] + MIN_UNIT) = (ULL)header;
+    // link current block to list
+    list[idx] = (ULL)header;
+}
+
+/**
+ * detach current free block from segregated free list
+*/
+static void detach_off(void* header) {
+    UI size = block_size(header);
+    int idx = high_bit(size);
+    ULL pre = *(ULL*)(header + MIN_UNIT);
+    ULL ne = *(ULL*)(header + MIN_UNIT + ADD_LEN);
+    if (pre == NULL_ADD && ne == NULL_ADD) list[idx] = NULL_ADD;
+    else {
+        if (ne != NULL_ADD) {
+            *(ULL*)(ne + MIN_UNIT) = pre;
+            if (pre == NULL_ADD) list[idx] = ne;
+        }
+        if (pre != NULL_ADD) *(ULL*)(pre + MIN_UNIT + ADD_LEN) = ne;
+    }
+}
+
+static UI round_up_size(UI size) {
+    return ((size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
+}
+
+/* get block size */
+static UI block_size(void* header) {
+    return *(UI*)header & ~0x7;
+}
+
+/**
+ * assign free block new size
+ * typically new size is larger than old one
+ * only size changes, control bit remains
+*/
+static void new_size(void* header, UI size) {
+    *(UI*)header &= 0x7;
+    *(UI*)header |= size;
+}
+
+/**
+ * use @param: size to rebuild header and footer
+ * @param:size will not modify block's control bits
+ * rebuild_hf will make sure new header and footer are identical
+*/
+static void rebuild_hf(void* header, UI size) {
+    new_size(header, size);
+    // rebuild footer
+    pack(get_footer(header), size, (*(UI*)header & 0x2) >> 1, *(UI*)header & 0x1);
+}
+
+/* pack the header with specific value */
+static void pack(void* header, UI block_size, int pre, int cur) {
+    *(UI*)header = block_size | (pre & 1) << 1 | (cur & 1);
+}
+
+// only free block has footer
+static void* get_footer(void* header) {
+    return header + block_size(header) - MIN_UNIT;
+}
+
+/* bit wise trick */
+
+/* round down to log @param:size(2 based) */
+static int high_bit(UI val) {
+    int i, bit = 0;
+    for (i = 4; i >= 0; i--) {
+        if (val & b[i]) {
+            val >>= s[i];
+            bit |= s[i];
+        }
+    }
+    return bit;
+}
+```
+
+# 网络相关
+
+希望这章讲的不是 c 语言中的 socket API...
+
+## C-S model
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/03/11/14:31:50:c-s_transaction.png)
+
+从硬件层面上主机通过 Network Adapter 接入到网络，对于主机本身而言可以将网络硬件认为是一种简单的 IO 设备，通过简单的 IO 操作实现从网络中下载和上传数据
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/03/11/14:37:31:hardware_of_network.png)
+
+在 unix 中本着万事万物皆对象的想法，通过向文件中写入数据，可以将数据写入磁盘，通过向 virtual file 中写入数据可以将数据上传到网络中
 
 
 
