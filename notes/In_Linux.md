@@ -1159,7 +1159,7 @@ int main(int argc, char** argv) {
 
 >   如果一个语言没有 async await 的机制的话，还是慎用回调函数，不然一层套一层，真的很难调试
 
+# GDB
 
-
-
+使用 gdb 调试程序时，要将编译的程序添加标志位 -g
 
