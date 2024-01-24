@@ -14903,7 +14903,46 @@ case CLOX_OP_SET_PROPERTY: {
 
 ### method (initializer included)
 
+在 clox 中方法和类型绑定, 类似保存类型属性的方式, 这里在 ClassObj 中使用一个 hash table 保存 method
 
+```c
+// object.h
+struct ClassObj {
+    Obj obj;
+    StringObj *name;
+    Table methods;
+};
+
+// object.c
+ClassObj* new_class(StringObj *name) {
+    ClassObj *class = (ClassObj*)new_obj(OBJ_CLASS, sizeof(ClassObj));
+    class->name = name;
+    init_table(&class->methods);
+    return class;
+}
+
+// object.c -> free_obj()
+case OBJ_CLASS: {
+    ClassObj *class = (ClassObj*)obj;
+    free_table(&class->methods);
+    FREE(ClassObj, obj);
+    break;
+}
+```
+
+>   declaration, initializer, finalizer
+
+特别注意的是, 在 GC 的 trace 阶段, 在将 ClassObj 标记为 root 后, 还需要 trace 其下的各个 MethodObj
+
+```c
+// memory.c -> black_object
+case OBJ_CLASS: {
+    ClassObj *klass = (ClassObj*)obj;
+    mark_obj((Obj*)klass->name);
+    mark_table(&klass->methods);
+    break;
+}
+```
 
 
 

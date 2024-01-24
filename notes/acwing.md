@@ -2809,6 +2809,7 @@ int main() {
 		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/01/14/21:11:44:acwing_7.png" />
 	</a>
 </div>
+
 本题就是把上面的三种背包类型揉在了一起, 本身并没有什么特殊的, 因为背包问题的一个特性就是本行的状态仅和上一行相关, 枚举的每个物品, 其选举行为仅仅和当前背包的类型有关
 
 ```cpp
@@ -2853,27 +2854,122 @@ int main() {
 }
 ```
 
+### 二维 01 背包
+
+当 01 背包需要考虑两种体积的时候, 转变为二维背包问题, 这里不做数学上的解释, 直接按照 01 背包的方式进行优化即可 (两个维度都是从后向前遍历)
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/1024/" >
+		<img src = "https://cdn.jsdelivr.net/gh/SunYuanI/img@latest/img/acwing_1022.png" />
+	</a>
+</div>
+
+定义 f\[i][j] 表示使用精灵球不超过 i 个, 消耗体力不超过 j 时可以捕捉的最大精灵数目
+
+```cpp
+#include <iostream>
+#include <algorithm>
+
+using namespace std;
+
+const int N = 1010, M = 510, K = 110;
+
+int f[N][M];
+
+int main() {
+    int n, m, c;
+    scanf("%d%d%d", &n, &m, &c);
+    while (c--) {
+        int w1, w2;
+        scanf("%d%d", &w1, &w2);
+        for (int i = n; i >= w1; i--) {
+            for (int j = m; j >= w2; j--) f[i][j] = max(f[i][j], f[i - w1][j - w2] + 1);
+        }
+    }
+    
+    int cnt = f[n][m - 1];
+    if (cnt > 0) {
+        int k = m - 1;
+        for (; k && f[n][k] == cnt; k--);
+        printf("%d %d\n", cnt, m - (k + 1));    
+    } else printf("%d %d\n", cnt, m);
+}
+```
+
+>   注意到最后需要输出剩余体力, 因此需要找到最小的 k, 满足 f\[n][k] = f\[n][m - 1], 这里要注意的是, 返回值从 m - 1 开始, 因为本题要求需要有体力剩余
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/description/8/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/01/22/21:37:24:acwing_8.png" />
+	</a>
+</div>
+
+二维 01 背包裸题, 直接反向遍历即可
+
+```cpp
+#include <iostream>
+#include <algorithm>
+
+using namespace std;
+
+const int M = 110;
+
+int f[M][M];
+
+int main() {
+    int n, v, m;
+    scanf("%d%d%d", &n, &v, &m);
+    while (n--) {
+        int a, b, c;
+        scanf("%d%d%d", &a, &b, &c);
+        for (int i = v; i >= a; i--) {
+            for (int j = m; j >= b; j--) f[i][j] = max(f[i][j], f[i - a][j - b] + c);
+        }
+    }
+    printf("%d\n", f[v][m]);
+    return 0;
+}
+```
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/description/1022/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/01/22/22:08:03:acwing_1020.png" />
+	</a>
+</div>
+本题与众不同的一点在于, f\[i][j] 表示在氧气含量不少于 i 氮气含量不少于 j 的最小重量 (对比一般的二维背包 f\[i][j] 表示氧气不超过 i, 氮气不超过 j 的最小重量)
+
+因此在考虑状态转移的时候, 下边界应该取到 0
+
+```cpp
+#include <iostream>
+#include <algorithm>
+#include <cstring>
+
+using namespace std;
+
+const int N = 30, M = 80, K = 1010;
+
+int f[N][M];
+
+int main() {
+    int m, n, k;
+    scanf("%d%d%d", &m, &n, &k);
+    memset(f, 0x3f, sizeof(f));
+    f[0][0] = 0;
+    while (k--) {
+        int a, b, c;
+        scanf("%d%d%d", &a, &b, &c);
+        for (int i = m; i >= 0; i--) {
+            for (int j = n; j >= 0; j--) f[i][j] = min(f[i][j], f[max(i - a, 0)][max(j - b, 0)] + c);
+        }
+    }
+    
+    printf("%d\n", f[m][n]);
+    return 0;
+}
+```
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- 
 
 
 # 树状数组
