@@ -1509,6 +1509,152 @@ int main() {
 
 ```
 
+## LCA
+
+>   最近公共祖先问题
+
+LCA 有很多做法, 最简单的做法被称为向上标记法, 整体做法为搜索 + 标记, 可以在 $O(n)$ 的时间内找到两个节点的公共祖先: 从一个点开始向上搜索直到根节点, 一边搜索一边标记; 在一个节点完成搜索后, 从另外一个点开始, 向上搜索, 每轮搜索检查节点的标记, 一旦搜索到了一个被标记的节点, 则该节点即为最近公共祖先
+
+### 倍增法
+
+在倍增法中, 有两个关键结构, 数组 d[i] 表示节点 i 的深度, 定义根节点的深度为 1; 数组 f\[i][j], 表示节点 i 的距离其为 $2^j$ 的邻居节点, 显然 f\[i][0] 表示的是节点 i 的父节点, 而 f\[i][1] 表示的是节点 i 父节点的父节点
+
+有了这两个结构就可以执行最近公共祖先的搜索了, 对于任意的两个节点 a, b, 其寻找最近公共祖先的方法如下:
+
+*   调整 a 和 b, 使得二者的深度相同 => 让较深的那个节点向上搜索
+
+*   在二者深度相同后, 首先判断二者是否已经是相同节点了, 如果是的话直接返回节点 a/b; 否则节点 a 和 b 同时向上搜索, 搜索的时候采用上述提到的 f 数组, 从高位向低位遍历搜索, 在保证二者父节点不同的情况下, 不断向上搜索
+
+    >   注意到当节点 a 和节点 b 不断向上搜索时需要从高位开始向低位遍历, 这里的高位和低位是针对 f 数组的第二个维度的, 即 j 需要从大向小遍历; 这里考虑公共祖先的深度为 x, 而当前节点的深度为 y, 则一共需要向上搜索 y - x 层
+    >
+    >   由于 f 数组是二进制的倍增数组, 因此 a 和 b 第一次搜索上升的层数其实就等于向上遍历 y - x 二进制表示中的最高位, 而第二次搜索的层数就对应了次高位 ...
+    >
+    >   此外还要注意, 只有在 a 和 b 的公共父节点不同时, 才进行更新, 因为如果有 f\[a][j] = f\[b][j] 只能保证 f\[a][j] 是 a 和 b 的一个公共祖先, 而不能说明是最近的
+    >
+    >   因此搜索终点处, 一定有 f\[a][0] = f\[b][0], 只有在这里才可以确定 a 和 b 的最近公共父节点
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/description/1174/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/01/26/19:54:13:acwing_1172.png" />
+	</a>
+</div>
+
+一般而言, 这种 LCA 问题都是在树上搜索: n 个节点, n - 1 条边
+
+```cpp
+#include <iostream>
+#include <cstring>
+
+using namespace std;
+
+const int N = (int)4e4 + 10, M = N << 1, K = 16;
+
+int h[N], e[M], ne[M], idx = 0;
+int f[N][K], d[N];
+int q[N];
+
+void add(int a, int b) {
+    e[idx] = b;
+    ne[idx] = h[a];
+    h[a] = idx++;
+}
+
+int query(int a, int b) {
+    // 首先将更深的节点上升到相同高度 -> 二进制退避的思想
+    if (d[a] > d[b]) {
+        for (int i = K - 1; i >= 0 && d[a] > d[b]; i--) {
+            int p = f[a][i];
+            if (d[p] >= d[b]) a = p;
+        }
+        if (a == b) return 2;
+    }
+    if (d[a] < d[b]) {
+        for (int i = K - 1; i >= 0 && d[b] > d[a]; i--) {
+            int p = f[b][i];
+            if (d[p] >= d[a]) b = p;
+        }
+        if (a == b) return 1;
+    }
+    return 0;
+    
+    // 本题不要求找到具体的某个公共祖父节点, 因此最后的这一段被省略了
+    // 其实思想和上面退避
+    // for (int i = K - 1; i >= 0; i--) {
+    //     if (f[a][i] != f[b][i]) {
+    //         a = f[a][i];
+    //         b = f[b][i];
+    //     }
+    // }
+    // return f[a][0];
+}
+
+// 要注意的是这里 bfs 和 dfs 均可
+void bfs(int root) {
+    memset(d, 0x3f, sizeof d);
+    d[root] = 1;
+    d[0] = 0;
+    int hh = 0, tt = 0;
+    q[hh] = root;
+    while (hh <= tt) {
+        int t = q[hh++];
+        for (int i = h[t]; ~i; i = ne[i]) {
+            int j = e[i];
+            if (d[j] > d[t] + 1) {
+                d[j] = d[t] + 1;
+                q[++tt] = j;
+                // 当前节点的父节点直接标记
+                f[j][0] = t;
+                // 在计算深度的时候利用父节点
+                // 考虑 f[j][k] 可以分为两段, 首先计算 p = f[j][k - 1], 再计算 f[p][k - 1]
+                // 两段加在一起正好是 2^k 
+                for (int k = 1; k < K; k++) f[j][k] = f[f[j][k - 1]][k - 1];
+            }
+        }
+    }
+}
+
+void dfs(int node, int depth, int fa) {
+    d[node] = depth;
+    f[node][0] = fa;
+    for (int i = 1, p = f[node][i - 1]; i < K && p; i++, p = f[node][i - 1]) f[node][i] = f[p][i - 1];
+    for (int i = h[node]; i; i = ne[i]) {
+        int j = e[i];
+        if (j == fa) continue;
+        dfs(j, depth + 1, node);
+    }
+}
+
+
+int main() {
+    int n;
+    scanf("%d", &n);
+    int root = 0;
+    memset(h, -1, sizeof h);
+    while (n--) {
+        int a, b;
+        scanf("%d%d", &a, &b);
+        if (b == -1) root = a;
+        else {
+            // 无向图建双向边
+            add(a, b);
+            add(b, a);
+        }
+    }
+
+    bfs(root);
+    //dfs(root, 1, -1);
+    int m;
+    scanf("%d", &m);
+    while (m--) {
+        int a, b;
+        scanf("%d%d", &a, &b);
+        printf("%d\n", query(a, b));
+    }
+}
+```
+
+
+
 # dp
 
 >   大寄
