@@ -1578,7 +1578,7 @@ int query(int a, int b) {
     return 0;
     
     // 本题不要求找到具体的某个公共祖父节点, 因此最后的这一段被省略了
-    // 其实思想和上面退避
+    // 其实思想和上面退避到相同高度类似
     // for (int i = K - 1; i >= 0; i--) {
     //     if (f[a][i] != f[b][i]) {
     //         a = f[a][i];
@@ -1653,6 +1653,112 @@ int main() {
 }
 ```
 
+### tarjan
+
+>   离线求解 LCA => 要求一次性读入所有的代求的 LCA
+
+可以在 $O(n + m)$ 的时间内完成 m 对 LCA 的求解, 唯一的限制在于需要在搜索前就知道需要求哪些节点的 LCA
+
+将图中所有的节点分为三类: 
+
+*   已经被搜索过, 且已经被回溯过的节点
+*   正在搜索的节点
+*   还未搜索的节点
+
+对于正在搜索的节点, 遍历 m 对询问, 看一下是否存在某对询问, 其包含了当前节点和已经被搜索过的节点, 如果存在, 那么其最近公共祖先一定在当前正在搜索点的路径上!
+
+由此, 可以利用并查集, 将所有已经搜索过的点和其对应当前路径上的点加入一个并查集, 在 $O(1)$ 的时间内找到其对应的路径上的节点
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/1173/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/01/27/16:25:49:acwing_1171.png" />
+	</a>
+</div>
+因为是树, 因此两个节点之间只有一条链路, 不存在更优的路线, 因此本题可以认为是求解树上任意两个节点之间的距离
+
+经典解法: 定义数组 d 表示节点到根节点的距离, 则有 dis(a, b) = d[a] + d[b] - d[lca] * 2, 即分别求解两个节点到根节点的距离, 再和 lca 做差
+
+```java
+#include <iostream>
+#include <cstring>
+#include <vector>
+
+using namespace std;
+
+typedef pair<int, int> PII;
+
+const int N = (int)1e4 + 10, M = N << 1;
+
+int p[N], vis[N], rst[M];
+// 使用 qs 保存查询, qs[i] 表示节点 i 的查询, 这里使用一个 PII 的 vector 保存每个查询
+// PII 的第一个维度表示待查询的下一个节点, PII 的第二个维度表示该查询在原 query 中的位置
+vector<PII> qs[N];
+int h[N], e[M], ne[M], w[M], idx;
+int d[N];
+int n, m;
+
+void add(int a, int b, int c) {
+    e[idx] = b;
+    ne[idx] = h[a];
+    w[idx] = c;
+    h[a] = idx++;
+}
+
+int find(int x) {
+    if (p[x] != x) p[x] = find(p[x]);
+    return p[x];
+}
+
+void union_(int a, int b) {
+    int pa = find(a);
+    int pb = find(b);
+    if (pa == pb) return;
+    p[pa] = pb;
+}
+
+void dfs(int n, int fa) {
+    for (int i = h[n]; ~i; i = ne[i]) {
+        int j = e[i];
+        if (j == fa) continue;
+        d[j] = d[n] + w[i];
+        dfs(j, n);
+        // 注意到只有在节点已经被回溯了才进行并查集的合并
+        vis[j] = 1;
+        union_(j, n);
+    }
+    
+    for (auto &pi : qs[n]) { 
+        if (vis[pi.first]) {
+            int lca = find(pi.first);
+            rst[pi.second] = d[n] + d[pi.first] - (d[lca] << 1);
+        }
+    }
+}
+
+int main() {
+    scanf("%d%d", &n, &m);
+    memset(h, -1, sizeof h);
+    for (int i = 1; i <= n; i++) p[i] = i;
+    for (int i = 1; i < n; i++) {
+        int a, b, c;
+        scanf("%d%d%d", &a, &b, &c);
+        add(a, b, c);
+        add(b, a, c);
+    }
+    
+    for (int i = 0; i < m; i++) {
+        int a, b;
+        scanf("%d%d", &a, &b);
+        qs[a].push_back({b, i});
+        qs[b].push_back({a, i});
+    }
+    
+    dfs(1, -1);
+    
+    for (int i = 0; i < m; i++) printf("%d\n", rst[i]);
+    return 0;
+}
+```
 
 
 # dp
