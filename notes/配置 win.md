@@ -98,6 +98,7 @@ Wox 的新版都是 Pre-release 版本，最新的 stable 版本太老了
 
 *   获取 github token
 *   配置 PicGo 中 github 图床的设置(需要配置 CDN 加速)
+*   重命名图片名 [optional]
 
 ## 获取Token
 
@@ -120,6 +121,14 @@ https://cdn.jsdelivr.net/gh/buzzxI/img/@latest
 其中最后的 @latest 加的很玄学，不加的话可能图片的时效性会变差...
 
 >   其他的配置随便点点就行了比较简单
+
+## 图片重命名
+
+默认的重命名策略不能满足需求, 因此这里专名找了一个插件: [gclove/picgo-plugin-super-prefix: A PicGo plugin for elegant file name prefix](https://github.com/gclove/picgo-plugin-super-prefix#readme)
+
+这里仅仅使用这个插件添加了文件命名前缀, 而没有直接修改文件名; 前缀被定义为: YY/MM/DD/HH:mm:ss:
+
+最大的好处在于, 相同名称的图片上传后自带时间戳, 并且上传的图片有自己的名称, 不会乱掉
 
 # Typora
 
