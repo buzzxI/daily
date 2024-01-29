@@ -93,13 +93,12 @@ public static void main(String[] args) {
     for (int i = 0; i < buffer.capacity(); i++) buffer.put(i);
     // mode switch
     buffer.flip();
+    // print 0 ~ 4
     while (buffer.hasRemaining()) System.out.println(buffer.get());
 }
 ```
 
-
-
-
+一个 Buffer 可以通过调用方法 asReadOnlyBuffer() 获取一个只读的 buffer
 
 ## Channel
 
@@ -111,9 +110,61 @@ public static void main(String[] args) {
 
 channel 需要和 buffer 结合使用, 通过调用 read 方法实现向 buffer 写入, 或调用 write 将 buffer 中的内容写入 channel
 
+之前需要使用 IO stream 完成的操作均可以使用 Channel 代替, 为了说明 channel 是全双工的, 这里针对同一个文件开启channel, 首先读取文件内容, 随后利用相同的 channel 进行写入
+
+```java
+private static void read_and_write(String words) {
+    Set<OpenOption> options = Set.of(StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
+    try (FileChannel channel = FileChannel.open(Paths.get("./test.txt"), options)) {
+        ByteBuffer buffer = ByteBuffer.allocate(1);
+        int len = channel.read(buffer);
+        byte[] bytes = new byte[1024];
+        if (len != -1) {
+            while (len != -1) {
+                buffer.flip();
+                buffer.get(bytes, 0, len);
+                String original = new String(bytes, 0, len, StandardCharsets.UTF_8);
+                System.out.print(original);
+                buffer.clear();
+                len = channel.read(buffer);
+            }
+        } else System.out.println("no existing works");
+        bytes = words.getBytes(StandardCharsets.UTF_8);
+        // switch back to write mode
+        buffer.clear();	
+        int idx = 0;
+        while (idx < bytes.length) {
+            int size = buffer.remaining();
+            buffer.put(bytes, idx, size);
+            buffer.flip();
+            int write = channel.write(buffer);
+            if (write != size) System.out.println("short count");
+            buffer.clear();
+            idx += size;
+        }
+    } catch (IOException e) {
+        throw new RuntimeException(e);
+    }
+}
+```
+
+本例中使用静态方法 FileChannel.open 获取一个 Channel, 可以看到, 在申请这个 channel 的时候, 使用的标志位是 CREATE/READ/WRITE 这一点有点类似在其他语言中获取 file descriptor 的过程
+
+随后创建了一个 ByteBuffer 用来和 FileChannel 交互, 这里的 ByteBuffer 大小为 1, 即只能保存一个字节, 实际中不应该这么小, 在读写大文件时应该创建更大的 ByteBuffer, 这里使用小 buffer 主要目的是为了说明, 在 buffer 一次性不能读完文本中的所有字节时, 需要循环读取
+
+要注意的是, 只有在 ByteBuffer 为写模式下, channel 才可以调用 read 方法进行 buffer 的填充, 而为了打印读取到的内容, 需要将 buffer 转化为读模式, 即调用 flip() 方法, 而为了下一轮此的读操作, 需要重新将 buffer 恢复为写模式, 即调用 clear() 方法
+
+>   实际中 buffer 并没有所有的写模式和读模式, 在看了 buffer 的成员变量之后和各个方法之后可以看到, buffer 就是通过 position, limit, capacity 维护保存的缓存, 而通过调用方法 flip 和 clear 修改这些成员变量
+>
+>   这里仅仅是为了方便理解, 才对 buffer 进行写/读模式的区分
+
+在完成打印后, 再利用相同的 ByteBuffer 将入参 @param: words 写入 FileChannel, 同样的, 因为 buffer 大小有限, 因此在写入文件的时候也是需要通过循环写入的, 基本原理还是相同, 需要 buffer 不断在写/读模式下进行切换
+
+NIO 提供了很强大的工具, 支持 scatter 和 gather, channel 可以将内容填写到多个 buffer 中, 也可以从多个 buffer 获取数据写入 channel; 并且还提供了十分简单的 API, 还是原来的 read/write 方法, channel 提供了重载方法, 通过将多个 buffer 添加到一个数组中, 可以实现一次性按照顺序写入多个 buffer, 或者按照顺序读取多个 buffer
+
 ## Selector
 
-一般而言, 可以认为一个 selector 对应了一个线程, 将 Channel 和对应的事件注册到 selector 后, 可以通过访问 selector 判断事件是否发生
+一般而言, 可以认为一个 selector 对应了一个线程, 将 Channel 和对应的事件注册到 selector 后, 可以通过访问 selector 判断事件是否发生, 从而实现一个 selector 管理多个 channel
 
 在典型的网络场景中, selector 可能同时监听 socket 连接事件, 读/写事件, 在某次轮询中, 可以获取已经发生的事件 -> SelectionKey, 并获取事件对应的 channel
 
@@ -125,6 +176,11 @@ channel 需要和 buffer 结合使用, 通过调用 read 方法实现向 buffer 
 *   SelectionKey.OP_WRITE: 可写事件, 表示可以将数据写入到对应的 Channel
 
 Selector 一般也不是通过构造方法创建的, 更多的是调用静态方法 open() 获取一个 Selector
+
+*   select() => 获取对应事件发生的 channel 的个数, 这个方法是阻塞的, 即至少一个 channel 发生了对应的事件才会返回
+*   select(long timout) => 相当于设置了一个超时, 在指定超时事件后必然返回
+*   selectNow() => 非阻塞的, 可能返回 0, 即没有任何一个 channel 的事件发生
+*   selectedKeys() => 直接获取一个所有事件已经发生 keys => 可以间接获取对应的 channel
 
 一般而言通过一个 selector 在某一次轮询在中有如下结构:
 
