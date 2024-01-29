@@ -202,8 +202,212 @@ while (keyIterator.hasNext()) {
     }
     keyIterator.remove();
 }
-
 ```
+
+## TCP with NIO
+
+这里需要实现一个带有转发功能的多用户的聊天程序, 从某种程度上, NIO 实现一个支持多 client 的聊天程序其实比 BIO 更简单一点 ...
+
+为了尽可能简化, 这里并没有为每个 IO 分配一个 handler 线程处理, 转发功能在 server 线程本身实现; 而为了保证 client 可以持续读入输入, 这里每个 client 开辟了两个线程, 一个用来读取用户输入, 并发向 server; 另一个线程被阻塞, 用来持续获取来自 server 的输入
+
+### server
+
+默认情况下, server 在开启时仅维护了一个 ServerSocketChannel, 同时使用 selector 管理
+
+```java
+public ServerChannelOperation(int port) {
+    try {
+        this.server = ServerSocketChannel.open();
+        // non-blocking server channel
+        server.configureBlocking(false);
+        server.socket().bind(new InetSocketAddress(port));
+        this.selector = Selector.open();
+        // ServerSocketChannel needs OP_ACCEPT
+        server.register(selector, SelectionKey.OP_ACCEPT);
+    } catch (IOException e) {
+        throw new RuntimeException(e);
+    }
+}
+```
+
+在完成初始化操作后, server 开始持续执行监听, 等待 client 的连接请求或 IO 请求
+
+```java
+public void listen() {
+    try {
+        while (true) {
+            // block here
+            selector.select();
+            Set<SelectionKey> keys = selector.selectedKeys();
+            Iterator<SelectionKey> iterator = keys.iterator();
+            while (iterator.hasNext()) {
+                SelectionKey key = iterator.next();
+                if (key.isValid()) {
+                    if (key.isAcceptable()) {
+                        SocketChannel client = server.accept();
+                        client.configureBlocking(false);
+                        client.register(this.selector, SelectionKey.OP_READ);
+                    } else if (key.isReadable()) handle(key);
+                }
+                iterator.remove();
+            }
+        }
+    } catch (IOException e) {
+        throw new RuntimeException(e);
+    }
+}
+```
+
+如果当前是一个 ACCEPT 事件, 则调用 accept() 获取 SocketChannel, 这里需要显示的将 client 设置为 none-blocking, 并交给 selector 托管, 标记的事件类型为 READ
+
+如果当前是一个 READ 事件, 表示当前存在一个 client 向 server 发送了数据, 此时 server 调用 handle 进行日志记录并转发给其他 client
+
+这里的 listen 整体上使用的就是上面的框架, 通过迭代器处理各个 SelectionKey, 每次处理完一个事件将该事件从集合中删除
+
+```java
+private void handle(SelectionKey clientKey) {
+    SocketChannel client = (SocketChannel) clientKey.channel();
+    try  {
+        ByteBuffer buffer = ByteBuffer.allocate(8);
+        int len = client.read(buffer);
+        if (len > 0) {
+            System.out.print("from " + client.getRemoteAddress() + ":");
+            while (len > 0) {
+                buffer.flip();
+                byte[] bytes = new byte[buffer.remaining()];
+                buffer.get(bytes);
+                forward(bytes, client);
+                System.out.print(new String(bytes, StandardCharsets.UTF_8));
+                buffer.clear();
+                len = client.read(buffer);
+            }
+            System.out.println();
+        }
+    } catch (IOException e) {
+        try {
+            System.out.println(client.getRemoteAddress() + " off line");
+            clientKey.cancel();
+            client.close();
+        } catch (IOException ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+}
+```
+
+这里故意设置一个很小的 ByteBuffer, 通过一个 while 循环保证 server 可以一次性完成 client 输入的读入, 每个读入的输入都会依次调用转发方法 forward 完成转发
+
+```java
+private void forward(byte[] bytes, SocketChannel client) {
+    Set<SelectionKey> keys = selector.keys();
+    for (SelectionKey key : keys) {
+        if (key.channel() instanceof SocketChannel socketChannel && socketChannel != client) {
+            ByteBuffer tmp = ByteBuffer.wrap(bytes);
+            try {
+                socketChannel.write(tmp);
+            } catch (IOException e) {
+                try {
+                    System.out.println(socketChannel.getRemoteAddress() + " off line");
+                    key.cancel();
+                    socketChannel.close();
+                } catch (IOException ex) {
+                    throw new RuntimeException(ex);
+                }
+            }
+        }
+    }
+}
+```
+
+方法 forward 会向除了输入 client 之外的所有其他 client 进行转发, 这是群聊功能的关键部分, 至于 client 就相对简单了很多 (除了两个线程之外)
+
+```java
+public ClientChannelOperation(int port) {
+    try {
+        this.client = SocketChannel.open();
+        this.client.configureBlocking(false);
+        this.selector = Selector.open();
+        this.client.register(selector, SelectionKey.OP_CONNECT);
+        this.client.connect(new InetSocketAddress("127.0.0.1", port));
+        this.waitForConnect();
+    } catch (IOException e) {
+        throw new RuntimeException(e);
+    }
+}
+```
+
+尽管每个 client 都只需要管理一个 socket channel, 但还是使用了 selector 管理, selector 首先监听 CONNECT 事件, 完成 client 到 server 的连接建立, 随后调用 waitForConnect() 等待连接完成
+
+```java
+private void waitForConnect() throws IOException {
+    selector.select();
+    Set<SelectionKey> keys = selector.selectedKeys();
+    Iterator<SelectionKey> iterator = keys.iterator();
+    while (iterator.hasNext()) {
+        SelectionKey key = iterator.next();
+        if (key.isValid() && client.finishConnect()) {
+            client.register(selector, SelectionKey.OP_READ);
+            Thread readThread = new Thread(this::read);
+            readThread.start();
+        }
+        iterator.remove();
+    }
+}
+```
+
+在连接完成之后重新为 client 配置监听事件, selector 随后需要监听 READ 事件, 等待来自 server 的转发, read 方法也是一个阻塞的方法, 和 server 类似
+
+```java
+private void read() {
+    try {
+        while (true) {
+            selector.select();
+            Set<SelectionKey> keys = selector.selectedKeys();
+            Iterator<SelectionKey> iterator = keys.iterator();
+            while (iterator.hasNext()) {
+                SelectionKey key = iterator.next();
+                if (key.isValid() && key.isReadable()) {
+                    ByteBuffer buffer = ByteBuffer.allocate(8);
+                    int len = client.read(buffer);
+                    if (len > 0) {
+                        System.out.print("from " + client.getRemoteAddress() + ":");
+                        while (len > 0) {
+                            byte[] bytes = new byte[buffer.remaining()];
+                            buffer.flip();
+                            buffer.get(bytes, 0, len);
+                            String msg = new String(bytes, 0, len, StandardCharsets.UTF_8);
+                            System.out.print(msg);
+                            buffer.clear();
+                            len = client.read(buffer);
+                        }
+                        System.out.println();
+                    }
+                }
+                iterator.remove();
+            }
+        }
+    } catch (IOException e) {
+        throw new RuntimeException(e);
+    }
+}
+```
+
+类似的, 这里的 buffer 也设置了 8 个字节, 并通过 while 循环持续从 server 获取输入, 最后的话就是 write 方法了, 用来向 server 发送数据
+
+```java
+public void write(String msg) throws IOException {
+    ByteBuffer buffer = ByteBuffer.wrap(msg.getBytes(StandardCharsets.UTF_8));
+    client.write(buffer);
+}
+```
+
+>   200 行以内实现群聊
+
+
+
+
+
+
 
 
 
