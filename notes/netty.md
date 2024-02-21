@@ -1488,9 +1488,557 @@ public class WebSocketServer {
 
 在经过 WebSocketServerProtocolHandler 之后, 消息会以 WebSocketFrame 的形式呈递给 WebSocketServerHandler
 
+## kryo
 
+很多时候 netty 交互的并不直接是文本数据, 可能是某些序列化后的对象, netty 默认提供了 ObjectDecoder/ObjectEncoder 用来将对象解码/编码 -> 本质上使用 jdk 原生序列化对象的 api
 
+[EsotericSoftware/kryo: Java binary serialization and cloning: fast, efficient, automatic](https://github.com/EsotericSoftware/kryo) 是一个开源的序列化库, 如果没有多语言环境需求的话就用这个吧
 
+>   dubbo 已经准备使用 kryo 替换 Hessian 了 -> [Kryo 和 FST 序列化 | Apache Dubbo](https://cn.dubbo.apache.org/zh-cn/docsv2.7/user/serialization/)
+>
+>   如果有跨平台需求的话可以用 google 的 [protocolbuffers/protobuf: Protocol Buffers - Google's data interchange format](https://github.com/protocolbuffers/protobuf)
+
+官方给出了一个 quick start, 十分好用
+
+```java
+// User.java
+
+package icu.buzz;
+
+public class User {
+    private String name;
+    private String password;
+
+    public User() {
+    }
+
+    public User(String name, String password) {
+        this.name = name;
+        this.password = password;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
+    }
+}
+
+// Main.java
+
+package icu.buzz;
+
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.io.Input;
+import com.esotericsoftware.kryo.io.Output;
+
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+
+public class Main {
+    public static void main(String[] args) throws FileNotFoundException {
+        Kryo kryo = new Kryo();
+        kryo.register(User.class);
+
+        User u = new User("buzz", "buzz");
+
+        Output output = new Output(new FileOutputStream("user.bin"));
+        kryo.writeObject(output, u);
+        output.close();
+
+        Input input = new Input(new FileInputStream("user.bin"));
+        User uu = kryo.readObject(input, User.class);
+        input.close();
+
+        System.out.println(uu.getName());
+        System.out.println(uu.getPassword());
+    }
+}
+```
+
+>   将对象序列化并写入到文件 "user.bin" 中; 并从该文件中读取数据并返回一个对象
+
+## RPC
+
+借助 netty 框架, 使用 kryo 进行序列化, 实现 RPC
+
+RPC 的关键在于代理模式, 当 client 端进行函数调用时, 通过代理模式, 中断方法调用, 而将方法名、参数等信息封装好, 发送给 server 端进行方法调用, 并借助 java 的 futrue 特性阻塞当前线程, 等待 RPC 的结果返回
+
+### RPC object
+
+这里使用 RpcRequest 和 RpcResponse 分别表示 RPC 请求和响应
+
+```java
+// RpcRequest.java
+
+package icu.buzz.rpc;
+
+public class RpcRequest {
+    private String serviceName;
+    private String methodName;
+    private Object[] params;
+
+    // reserved for kryo
+    public RpcRequest() {
+    }
+
+    public RpcRequest(String serviceName, String methodName, Object[] params) {
+        this.serviceName = serviceName;
+        this.methodName = methodName;
+        this.params = params;
+    }
+
+    public String getServiceName() {
+        return serviceName;
+    }
+
+    public void setServiceName(String serviceName) {
+        this.serviceName = serviceName;
+    }
+
+    public String getMethodName() {
+        return methodName;
+    }
+
+    public void setMethodName(String methodName) {
+        this.methodName = methodName;
+    }
+
+    public Object[] getParams() {
+        return params;
+    }
+
+    public void setParams(Object[] params) {
+        this.params = params;
+    }
+}
+```
+
+在 RPC 中 client 和 server 双方需要共享接口, 在 client 端调用这个接口, 而在 server 端实现这个接口; 为了 RPC 的通用性, 这里需要封装对应的接口名 (serviceName), 调用的方法名 (methodName), 调用方法的参数列表 (params)
+
+```java
+// RpcResponse.java
+
+package icu.buzz.rpc;
+
+public class RpcResponse {
+    private Object rst;
+    private String msg;
+    public RpcResponse() {
+    }
+
+    public RpcResponse(Object rst, String msg) {
+        this.rst = rst;
+        this.msg = msg;
+    }
+
+    public Object getRst() {
+        return rst;
+    }
+
+    public void setRst(Object rst) {
+        this.rst = rst;
+    }
+
+    public String getMsg() {
+        return msg;
+    }
+
+    public void setMsg(String msg) {
+        this.msg = msg;
+    }
+}
+```
+
+RpcResponse 中封装了方法调用的结果 (rst), 而这种涉及到网络连接的应用通常是不可靠的, 因此这里还封装了 msg 用来指示方法调用的情况
+
+值得注意的是, 这里显示的添加了无参构造方法, 这里主要是因为 kryo 默认需要通过调用无参构造方法才能进行实例对象的创建 (当然这个是可以配置的 ([EsotericSoftware/kryo: Java binary serialization and cloning: fast, efficient, automatic](https://github.com/EsotericSoftware/kryo?tab=readme-ov-file#object-creation) 我懒得配置就是了)
+
+### coder/decoder
+
+这部分涉及到 kryo 的配置, 对于 server 而言, 需要接收一个 RpcRequest 并返回一个 RpcResponse; 而对于 client 而言, 需要发送一个 RpcRequest 并接收一个 RpcResponse
+
+因此 server 端和 client 端的 coder/decoder 是不同的; 这里自定义了 RpcCodec 继承了类 ByteToMessageCodec 并在方法 decode 和 encode 方法中分别进行反序列化和序列化操作
+
+```java
+// client -> RpcCodec.java
+
+package icu.buzz.rpc;
+
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.io.Input;
+import com.esotericsoftware.kryo.io.Output;
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.ByteToMessageCodec;
+
+import java.util.List;
+
+public class RpcCodec extends ByteToMessageCodec<RpcRequest> {
+    private final Kryo kryo;
+
+    public RpcCodec() {
+        this.kryo = new Kryo();
+        kryo.register(RpcRequest.class);
+        kryo.register(RpcResponse.class);
+        kryo.register(Object[].class);
+    }
+
+    @Override
+    protected void encode(ChannelHandlerContext ctx, RpcRequest msg, ByteBuf out) {
+        // try with resources will close the output automatically
+        // create a kryo output buffer with size 1024, maximum size of the buffer is -1 (on limit)
+        try (Output output = new Output(1024, -1)) {
+            // write object into kryo output
+            kryo.writeObject(output, msg);
+            // get output size
+            int len = output.position();
+            // write object length into ByteBuf
+            out.writeInt(len);
+            // write object self into ByteBuf
+            out.writeBytes(output.getBuffer(), 0, len);
+        }
+    }
+
+    @Override
+    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
+        if (in.readableBytes() < 4) {
+            return;
+        }
+        // mark current position -> size of Object
+        in.markReaderIndex();
+        int len = in.readInt();
+        if (in.readableBytes() < len) {
+            // reset to the marked position
+            in.resetReaderIndex();
+            return;
+        }
+
+        byte[] bytes = new byte[len];
+        in.readBytes(bytes);
+
+        // try with resources will close the input automatically
+        try (Input input = new Input(bytes)) {
+            RpcResponse response = kryo.readObject(input, RpcResponse.class);
+            out.add(response);
+        }
+    }
+}
+```
+
+在使用 kryo 进行对象的序列化之前, 首先需要进行类型的注册, 具体的可以参考官方文档
+
+这里的 RpcCodec 是 client 端的, server 端的实现是类似的, 但要注意上面提到的不同
+
+序列化的格式为: 对象大小 (4 Bytes) + 对象本身
+
+由于这里并不是将对象保存在文件当中, 因此这里的 encode 方法中创建的 Output 其实是在内存中开辟了一个字节数组, 并将对象临时序列化到内存中, 随后调用方法 position 获取对象大小, 然后依次将大小和对象本身添加到 out 中
+
+decode 方法在反序列化的时候, 首先需要获取对象的大小, 由于这里使用 4 个字节表示对象的大小, 因此如果可读的字节个数不足 4 个时将直接返回; 在获取到对象的大小后, 后续可读的字节数可能不足一个对象的大小, 此时需要重置, 在进行对象读取的时候, 可读的字节数一定达到了一个对象的大小
+
+### client
+
+上面也提到了, RPC 的关键在于代理模式, 使得程序可以中断方法的调用, 并通过网络调用的方式取代直接的方法调用
+
+client 和 server 需要共享接口, 这里的 client 通过调用一个静态方法完成对象的获取, 并执行方法调用
+
+```java
+// client.java
+
+package icu.buzz;
+
+import icu.buzz.rpc.ServiceFactory;
+
+public class Client {
+    public static void main(String[] args) {
+        // rpc client
+        Service service = ServiceFactory.getService(Service.class);
+        System.out.println(service.echo("hello"));
+        System.out.println(service.echo("buzz"));
+    }
+}
+```
+
+可以预见的是, 本质上 getService 方法就是一个 Proxy.newProxyInstance -> 就是一个动态代理
+
+```java
+// ServiceFactory.java
+
+package icu.buzz.rpc;
+
+import java.lang.reflect.Proxy;
+
+public class ServiceFactory {
+
+    public static <T> T getService(Class<T> klass) {
+        return (T) Proxy.newProxyInstance(klass.getClassLoader(), new Class<?>[]{klass}, new RpcHandler());
+    }
+}
+```
+
+类 RpcHandler 实现了接口 InvocationHandler, 表示实际中断方法调用后的处理程序
+
+```java
+// RpcHandler.java
+
+package icu.buzz.rpc;
+
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+
+public class RpcHandler implements InvocationHandler {
+    private static final String HOST = "localhost";
+    private static final int PORT = 8888;
+
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) {
+        Consumer consumer = new Consumer(HOST, PORT);
+        try {
+            consumer.init();
+            RpcRequest request = new RpcRequest(method.getDeclaringClass().getName(), method.getName(), args);
+            RpcResponse response = consumer.invoke(request);
+            if (response == null) return null;
+            return response.getRst();
+        } catch (InterruptedException e) {
+            return null;
+        } finally {
+            consumer.release();
+        }
+    }
+}
+```
+
+注意到这里就是通过 Consumer 对象创建了一个到 server 的连接, 同时调用方法 invoke 进行 RPC, 最后将结果返回
+
+>   还是挺简单的
+
+Consumer 也没什么的, 和之前看到的 netty client 类似
+
+```java
+// Consumer.java
+
+package icu.buzz.rpc;
+
+import com.esotericsoftware.kryo.Kryo;
+import com.esotericsoftware.kryo.io.Output;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.string.StringDecoder;
+import io.netty.handler.codec.string.StringEncoder;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+
+public class Consumer {
+    private final String host;
+
+    private final int port;
+
+    private EventLoopGroup worker;
+    private Channel channel;
+
+    public Consumer(String host,int port) {
+        this.host = host;
+        this.port = port;
+    }
+
+    public void init() throws InterruptedException {
+        this.worker = new NioEventLoopGroup();
+        Bootstrap bootstrap = new Bootstrap();
+        bootstrap.group(worker)
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ChannelPipeline pipeline = ch.pipeline();
+                        pipeline.addLast("rpc coder/decoder", new RpcCodec())
+                                .addLast("Consumer Handler", new ConsumerHandler());
+                    }
+                })
+                .option(ChannelOption.SO_KEEPALIVE, true);
+        this.channel = bootstrap.connect(host, port).sync().channel();
+    }
+
+    public void release() {
+        try {
+            if (channel != null && channel.isOpen()) this.channel.close().sync();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            this.worker.shutdownGracefully();
+        }
+    }
+
+    public RpcResponse invoke(RpcRequest request) {
+        CompletableFuture<RpcResponse> future = new CompletableFuture<>();
+        channel.pipeline().get(ConsumerHandler.class).setFuture(future);
+        channel.writeAndFlush(request);
+        try {
+            return future.get();
+        } catch (InterruptedException | ExecutionException e) {
+            return null;
+        }
+    }
+}
+```
+
+和之前最大的区别在于, 这里的 client 需要等待方法 invoke 的调用才会向 server 发送数据, 同时写数据的操作需要维护一个 channel 引用, 这里将 channel 的作用域提升为一个成员变量
+
+由于 RPC 需要等待 server 端的处理, 这里出于简便, 就然 client 保持阻塞, 直到收到了一个响应; 这里使用了 future 特性, 在进行方法调用之前, 为 handler 设置一个 future, 随后便一直阻塞在该 future 上
+
+可以预见的是, handler 的 channelRead 方法其实就是给这个 future 设置了一个返回值
+
+```java
+// ConsumerHandler.java
+
+package icu.buzz.rpc;
+
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
+
+import java.util.concurrent.CompletableFuture;
+
+public class ConsumerHandler extends SimpleChannelInboundHandler<RpcResponse> {
+
+    private CompletableFuture<RpcResponse> future;
+
+    public void setFuture(CompletableFuture<RpcResponse> future) {
+        this.future = future;
+    }
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, RpcResponse msg) throws Exception {
+        future.complete(msg);
+    }
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        future.completeExceptionally(cause);
+        ctx.close();
+    }
+}
+```
+
+### server
+
+server 端的处理相对就简单的多了, 毕竟不再涉及到动态代理以及 future 特性这些东西了
+
+```java
+// Provider.java
+
+package icu.buzz.rpc;
+
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.string.StringDecoder;
+import io.netty.handler.codec.string.StringEncoder;
+
+public class Provider {
+    private final int port;
+
+    public Provider(int port) {
+        this.port = port;
+    }
+
+    public void run() {
+        EventLoopGroup boss = new NioEventLoopGroup();
+        EventLoopGroup worker = new NioEventLoopGroup();
+        ServerBootstrap bootstrap = new ServerBootstrap();
+        bootstrap.group(boss, worker)
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) throws Exception {
+                        ChannelPipeline pipeline = ch.pipeline();
+                        pipeline.addLast("rpc coder/decoder", new RpcCodec())
+                                .addLast("Service Provider", new ProviderHandler());
+                    }
+                })
+                .option(ChannelOption.SO_BACKLOG, 128)
+                .childOption(ChannelOption.SO_KEEPALIVE, true);
+        try {
+            ChannelFuture future = bootstrap.bind(this.port).sync();
+            future.channel().closeFuture().sync();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            boss.shutdownGracefully();
+            worker.shutdownGracefully();
+        }
+    }
+}
+```
+
+注意到这里 server 的配置和之前的 netty server 不能说完全一致吧, 只能说毫无区别
+
+```java
+// ProviderHandler.java
+
+package icu.buzz.rpc;
+
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+
+public class ProviderHandler extends SimpleChannelInboundHandler<RpcRequest> {
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, RpcRequest msg) {
+        RpcResponse response = new RpcResponse(null);
+        try {
+            // get class
+            Class<?> klass = Class.forName(msg.getServiceName() + "Impl");
+            // get method
+            Object[] params = msg.getParams();
+            Class<?>[] paramTypes = new Class[params.length];
+            for (int i = 0; i < params.length; i++) paramTypes[i] = params[i].getClass();
+            Method method = klass.getMethod(msg.getMethodName(), paramTypes);
+            // new an instance
+            Object instance = klass.getDeclaredConstructor().newInstance();
+
+            Object result = method.invoke(instance, params);
+
+            response.setRst(result);
+            response.setMsg("all good");
+        } catch (ClassNotFoundException e) {
+            response.setMsg("service has not been provided");
+        } catch (NoSuchMethodException | SecurityException e) {
+            response.setMsg("function has not been provided");
+        } catch (InvocationTargetException | InstantiationException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        } finally {
+            ctx.writeAndFlush(response);
+        }
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        ctx.close();
+    }
+}
+```
+
+注意到 handler 的实现, 因为 RpcRequest 中仅仅包含了类名和方法名, 为了在 server 端进行方法调用, 这里需要使用反射
+
+这里认为每个在 RPC 中提供的服务 (接口), 其实现类在名字上都添加了一个 Impl, 并进行类型的搜索; 然后需要根据参数类型和方法名获取对应的方法; 在通过反射创建对象后, 调用对应的方法, 并将结果封装到 RpcResponse 中返回给 client
 
 
 
