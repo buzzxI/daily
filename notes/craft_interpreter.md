@@ -14905,6 +14905,8 @@ case CLOX_OP_SET_PROPERTY: {
 
 在 clox 中方法和类型绑定, 类似保存类型属性的方式, 这里在 ClassObj 中使用一个 hash table 保存 method
 
+>   本质上 method 也是一个 procedure call, 在 clox 中使用 FunctionObj 封装
+
 ```c
 // object.h
 struct ClassObj {
@@ -14943,6 +14945,83 @@ case OBJ_CLASS: {
     break;
 }
 ```
+
+所有的方法都定义在类型声明中, 因此 compiler 需要在函数 class_declaration 中对方法声明进行编译
+
+由于 lox 中没有成员变量, 在 lox class declaration 中的每个语句都是一个 method declaration, 和一般的语句一样, 每个 method declaration 以一个 ';' 结尾
+
+这里要注意的是, method 和 function 最主要的区别在于 method 需要绑定一个 class name, 因此在声明方法之前, 首先需要将 ClassObj 放在当前栈的栈顶
+
+```c
+// compiler.c -> class_declaration
+
+consume(CLOX_TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+
+// reload klass to bind method
+named_variable(&class_name, false);
+
+// methods
+while (!check(CLOX_TOKEN_EOF) && !check(CLOX_TOKEN_RIGHT_BRACE)) method();
+
+consume(CLOX_TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+
+// pop klass out of stack
+emit_byte(CLOX_OP_POP);
+```
+
+只要找不到 '}' 就持续进行 method 的解析, 具体 method 解析的行为放在了函数 method 内部
+
+因为本质上还是一个 FunctionObj, 因此这里可以复用之前 compiler 在遇到 function declaration 时定义的解析函数 function
+
+```c
+// compiler.c -> method
+
+static void method() {
+    // method name
+    consume(CLOX_TOKEN_IDENTIFIER, "Expect method name.");
+    uint16_t identifier = make_constant(OBJ_VALUE(new_string(parser->previous->lexeme, parser->previous->length)));
+
+    function(TYPE_METHOD);
+    
+    if (identifier > UINT8_MAX) emit_bytes(3, CLOX_OP_METHOD_16, identifier & 0xff, identifier >> 8);
+    else emit_bytes(2, CLOX_OP_METHOD, identifier);
+}
+```
+
+每个 method (closure) 需要和 method name 绑定, 函数 method 首先借助 make_constant 将函数名保存在常量池中, 然后调用函数 function 对方法体进行解析
+
+当 interpreter 执行完 function 中定义的字节码后, 当前 vm stack 栈顶保存了一个 closure, 下一步就是将该方法和类型绑定, 因此后续定义字节码指令 OP_METHOD 表示方法绑定
+
+vm 在取指执行到 OP_METHOD 的时候, 当前栈空间的栈顶一定是一个 closure (method), 栈顶下一定是一个 klass (在 class_declaration 中通过 name_variable 加载入栈的), 因此 vm 在处理 OP_METHOD 的时候依次弹栈即可完成方法绑定
+
+```c
+// vm.c -> run
+
+case CLOX_OP_METHOD: {
+    StringObj *identifier = AS_STRING(READ_CONSTANT());
+    Value method = peek(0);
+    Value klass = peek(1);
+    if (!IS_CLASS(klass)) {
+        runtime_error("only classes have methods.");
+        return INTERPRET_RUNTIME_ERROR;
+    }
+    ClassObj *klass_obj = AS_CLASS(klass);
+    table_put(identifier, method, &klass_obj->methods);
+    // do not forget to discard method
+    pop();
+    break;
+}
+```
+
+首先根据常量池中的索引获取方法名, 然后取出方法体和类型本身, 在 ClassObj 中方法就是通过一个 table 保存的, 因此这里也就是直接以方法名为 key 方法体为 value 保存在这个 hash table 中即可
+
+最后不要忘了由于一个 class 可能具有多个 method, 因此这里需要将当前 closure 弹栈
+
+>   一个 OP_METHOD 后可能是一个 OP_CLOSURE 用来声明下一个方法的方法体
+
+
+
+
 
 
 
