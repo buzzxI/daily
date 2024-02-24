@@ -14901,7 +14901,7 @@ case CLOX_OP_SET_PROPERTY: {
 
 不管是 SET 语句还是 GET 语句, vm 执行结束后, vm stack 栈顶保存的都是被 SET 或者需要 GET 的 Value (所有的 InstanceObj 都会被弹栈)
 
-### method (initializer included)
+### method bind
 
 在 clox 中方法和类型绑定, 类似保存类型属性的方式, 这里在 ClassObj 中使用一个 hash table 保存 method
 
@@ -15018,6 +15018,353 @@ case CLOX_OP_METHOD: {
 最后不要忘了由于一个 class 可能具有多个 method, 因此这里需要将当前 closure 弹栈
 
 >   一个 OP_METHOD 后可能是一个 OP_CLOSURE 用来声明下一个方法的方法体
+
+### method reference
+
+在 lox 的语法中是支持 method reference 的, 比如:
+
+```lox
+var closure = instance.method;
+closure(arguments);
+```
+
+在现有的语法中, 函数 dot 会将 method 视为 instance 的一个 property, 并尝试从 method 的 field 中获取该 property
+
+clox 将 method 认为是一个保存在 ClassObj 中的一个 closure, 因此按理来说上述第一个语句应该返回一个 ClosureObj, 同时将其和变量名 closure 绑定; 而 method 和 closure 存在本质上的区别, 在 OOP 语言中, method 保存了 this 指针, 在其方法内部可以访问示例对象的其他方法和成员变量, 因此 MethodObj 除了是一个 ClosureObj 之外, 还应当维护一个 InstanceObj 指针, 用来访问对象本身
+
+因此上述 instance.method 应该获取到一个 MethodObj 对象, 并通过之前的 get expression 赋值给变量 closure
+
+```c
+// object.h
+
+struct MethodObj {
+    Obj obj;
+    // type of receiver must be InstanceObj
+    Value receiver;
+    ClosureObj *closure;
+};
+```
+
+每当在 clox 中新添加一种类型, 就需要添加各种宏定义
+
+```c
+// object.h
+
+typedef enum {
+    OBJ_STRING,
+    OBJ_FUNCTION,
+    OBJ_NATIVE,
+    OBJ_CLOSURE,
+    OBJ_UPVALUE,
+    OBJ_CLASS,
+    OBJ_INSTANCE,
+    OBJ_METHOD,
+} ObjType;
+
+#define IS_METHOD(value)    (isObjType(value, OBJ_METHOD))
+#define AS_METHOD(value)    ((MethodObj*)AS_OBJ(value))
+
+MethodObj *new_method(Value receiver, ClosureObj *closure);
+
+// object.c
+
+MethodObj* new_method(Value receiver, ClosureObj *method) {
+    MethodObj *obj = (MethodObj*)new_obj(OBJ_METHOD, sizeof(MethodObj));
+    obj->receiver = receiver;
+    obj->closure = method;
+    return obj;
+}
+```
+
+对于 gc 而言, 在标记阶段标记一个 method 的时候, 还需要同步属于该 method 的 instance 对象和实际的 closure 
+
+```c
+// memory.c -> black_object
+
+case OBJ_METHOD: {
+    MethodObj *method = (MethodObj*)obj;
+    mark_obj((Obj*)method->receiver);
+    mark_obj((Obj*)method->closure);
+    break;
+}
+```
+
+由于 MethodObj 绑定了一个 ClosureObj 和一个 InstanceObj, 其中 ClosureObj 的生命周期应该和隶属的 ClassObj 相同, InstanceObj 的生命周期独立计算, 因此在回收 MethodObj 的时候, 只能回收本身
+
+```c
+// object.c -> free_obj
+
+case OBJ_METHOD: {
+    FREE(MethodObj, obj);
+    break;
+}
+```
+
+
+
+对于 compiler 而言, 不需要对 method reference 和 fields 进行区分, 在 vm 中, 原来的逻辑是:
+
+```c
+// vm.c -> run
+
+case CLOX_OP_GET_PROPERTY: {
+    StringObj *identifier = AS_STRING(READ_CONSTANT());
+    Value instance = peek(0);
+    if (!IS_INSTANCE(instance)) {
+        runtime_error("only instances have properties.");
+        return INTERPRET_RUNTIME_ERROR;
+    }
+    InstanceObj *instance_obj = AS_INSTANCE(instance);
+    Value value;
+
+    if (table_get(identifier, &value, &instance_obj->fields)) {
+        // discard instance
+        pop();
+        push(value);
+        break;
+    }
+
+    runtime_error("undefined property '%s'.", identifier->str);
+    return INTERPRET_RUNTIME_ERROR;
+}
+```
+
+即判断当前获取的 variable 是否属于当前 instance 的 field, 现在直接进行扩展, 在 field 中找不到对应的 variable 时, 就尝试在 method 中查找
+
+```c
+// vm.c -> run
+
+case CLOX_OP_GET_PROPERTY: {
+    StringObj *identifier = AS_STRING(READ_CONSTANT());
+    Value instance = peek(0);
+    if (!IS_INSTANCE(instance)) {
+        runtime_error("only instances have properties.");
+        return INTERPRET_RUNTIME_ERROR;
+    }
+    InstanceObj *instance_obj = AS_INSTANCE(instance);
+    Value value;
+
+    // identifier as field                
+    if (table_get(identifier, &value, &instance_obj->fields)) {
+        // discard instance
+        pop();
+        push(value);
+        break;
+    }
+
+    // identifier as method
+    if (table_get(identifier, &value, &instance_obj->klass->methods)) {
+        MethodObj *method = new_method(AS_INSTANCE(instance), AS_CLOSURE(value));
+        pop();
+        push(OBJ_VALUE(method));
+        break;
+    }
+
+    runtime_error("undefined property '%s'.", identifier->str);
+    return INTERPRET_RUNTIME_ERROR;
+}
+```
+
+如果当前 property 是一个 method, 则创建一个新的 MethodObj 并压入栈
+
+到目前为止, clox 还不能实现方法调用, clox compiler 可以根据 '(' 识别一个 function call, 同时正确记录 parameter 和 function name, 因此如果直接运行的话, method 会落入之前定义好的 function_call 函数的 switch 的 default case 中, 现在添加一个 case 分支针对 OBJ_METHOD
+
+```c 
+// vm.c -> function_call
+
+case OBJ_METHOD: {
+    MethodObj *method = AS_METHOD(function);
+    return invoke(method->closure, arg_cnt);
+}
+```
+
+### keyword 'this'
+
+method call 和一般的 function call 不同的是, 在 method call 中可以使用 this 关键字访问 instance 的 field 或调用本 class 的其他方法
+
+而目前为止, compiler 还是不能正确识别这个关键字, 在 lox 的语法中, 只有在 method declaration 中允许使用 this 关键字, 而 method declaration 本质上就是一个被 class declaration 包裹的 function declaration
+
+由于 this 在 scanner 解析的时候被认定为特殊的符号, 因此这里也需要为其配置对应的解析函数
+
+```c
+// compiler.c -> this
+
+ParserRule rules[] = {
+    [CLOX_TOKEN_THIS]          = { this,     NULL,    PREC_NONE },
+};
+
+// just treat this as a variable, let @function: variable handles all parsing
+static void this(bool assign) {
+    // this cannot be reassigned to any other values
+    variable(false);
+}
+```
+
+在解析 this 关键字的时候, 本质上还是将其看成了一个 variable, 并且 this 关键字就是对象本身, 因此不可以被重新赋值, 但目前为止 variable 函数在解析 variable 的时候要么将其视为一个 global variable 还么将其视为一个 local variable; 这里显然将 this 看成是 local variable 是比较合理的
+
+>   因为多个不同的 class 的 method 中均可以使用 this 关键字, 显然每个 this 都是不同的对象
+
+但这就会引出问题, 因为之前并没有通过 var 的方式将 this 定义为 local variable
+
+解析 function declaration 时, compiler 会把函数栈中第一个 slot 留给函数名本身; 而在遇到 method declaration 时, 该 slot 可以留给 this 关键字, 即在 method declaration 中就完成 this 的 local variable declaration
+
+```c
+// compiler.c -> init_resolver
+
+static void init_resolver(FunctionType type) {
+    Resolver *resolver = ALLOCATE(Resolver, 1); 
+
+    resolver->scope_depth = 0;
+
+    // first local is reserved for implicit function (self)
+    resolver->local_capacity = GROW_CAPACITY(0);
+    resolver->locals = GROW_ARRAY(Local, NULL, 0, resolver->local_capacity);
+    resolver->local_cnt = 0;
+    Local *local = &resolver->locals[resolver->local_cnt++];
+    local->depth = 0;
+    // the first slot is this for methods and initializer
+    if (type == TYPE_METHOD || type == TYPE_INITIALIZER) {
+        local->name.lexeme = "this";
+        local->name.length = 4;
+    } else {
+        local->name.lexeme = "";
+        local->name.length = 0;
+    }
+    // slot 0 is reserved for implicit function (self) => not captured 
+    local->captured = false;
+
+    resolver->upvalues = NULL;
+    resolver->upvalues_capacity = 0;
+
+    resolver->function = new_function();
+    // overwrite current resovler before new a function name
+    resolver->enclose = current_resolver;
+    current_resolver = resolver;
+
+    if (type != TYPE_SCRIPT) {
+        // function name
+        resolver->function->name = new_string(parser->previous->lexeme, parser->previous->length);
+    }
+    resolver->type = type;
+}
+```
+
+在 vm 实际运行时, 需要在调用函数之前将 slot 0 处赋值为调用该 method 的对象本身
+
+```c
+// vm.c -> function_call
+
+ case OBJ_METHOD: {
+    MethodObj *method = AS_METHOD(function);
+    // overwrite function slot into receiver slot
+    vm.sp[-arg_cnt - 1] = OBJ_VALUE(method->receiver);
+    return invoke(method->closure, arg_cnt);
+}
+```
+
+现在 this 关键字已经可以正常使用了, 在 lox 的语法中仅允许在 method declaration 中使用 this 关键字, 而 compiler 在此之前并未做任何检查, 因此这里还需要 compiler 对错误使用 this 关键字的地方给出报错
+
+由于 scanner 将 this 识别为一个特殊 token, compiler 在遇到 this 时, 会直接调用 this 函数, 因此检查 this 关键字合法性的最佳地点就是在函数 this 中, 简单来说就是看 this 关键字是否是在 method 内部使用的
+
+这里使用类似 Resolver 的方式, 定义一个 ClassResolver, 用来记录当前 class
+
+```c
+// compiler.c
+
+typedef struct ClassResolver {
+    struct ClassResolver *enclose;
+} ClassResolver;
+
+ClassResolver *current_class = NULL;
+
+static void class_declaration() {
+    consume(CLOX_TOKEN_IDENTIFIER, "Expect class name.");
+    Token class_name = *parser->previous;
+    // append class name into constant pool (no matter it is local or global)
+    uint16_t idx = identifier_constant(&class_name);
+    // class name
+    if (idx > UINT8_MAX) emit_bytes(3, CLOX_OP_CLASS_16, idx & 0xff, idx >> 8);
+    else emit_bytes(2, CLOX_OP_CLASS, idx);
+    
+    // if class is local -> klass remain in stack (referenced as local variable)
+    // if class is global -> klass poped by define_global
+    if (current_resolver->scope_depth) {
+        declare_local();
+        define_local();
+    } else {
+        // define class as global
+        define_global(idx);
+    }
+
+    ClassResolver class;
+    class.enclose = current_class;
+    current_class = &class;
+
+    consume(CLOX_TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+
+    // reload klass to bind method
+    named_variable(&class_name, false);
+
+    // methods
+    while (!check(CLOX_TOKEN_EOF) && !check(CLOX_TOKEN_RIGHT_BRACE)) method();
+
+    consume(CLOX_TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+
+    // pop klass out of stack
+    emit_byte(CLOX_OP_POP);
+
+    if (current_class->has_super) end_scope();
+    current_class = current_class->enclose;
+}
+```
+
+这样在函数 this 中, 只需要检查 current_class 是否为 NULL 即可
+
+```c
+// compiler.c -> this
+
+// just treat this as a variable, let @function: variable handles all parsing
+static void this(bool assign) {
+    if (current_class == NULL) {
+        error_report(parser->previous, "Can't use 'this' outside of a class.");
+        return;
+    }
+    // this cannot be reassigned to any other values
+    variable(false);
+}
+```
+
+### Initializer
+
+在 lox 语法中, 通过 init 方法定义构造方法, 构造方法和一般方法不同的是, 该方法是在创建对象时自动调用的; 并且该方法不允许有任何的返回值 (不允许 lox 程序主动在该方法中声明任何的返回值)
+
+由于是在创建对象时自动调用的, 因此 vm 在 function_call 中遇到 OBJ_CLASS 时会手动查询当前 klass 是否已经包含了一个名为 'init' 的方法
+
+```c
+// vm.c -> function_call
+
+ case OBJ_CLASS: {
+    ClassObj *klass = AS_CLASS(function);
+    // overwrite klass slot into instance slot
+    vm.sp[-arg_cnt - 1] = OBJ_VALUE(new_instance(klass));
+    Value initializer;
+    if (table_get(vm.init_string, &initializer, &klass->methods)) return invoke(AS_CLOSURE(initializer), arg_cnt);
+    else if (arg_cnt != 0) {
+        // lox do not force user to define a initializer
+        // but if user do not define a initializer
+        // then user can not pass ANY arguments to class 
+        runtime_error("expected 0 arguments but got %d.", arg_cnt);
+        return false;
+    }
+    return true;
+}
+```
+
+>   在 vm 中保存了一个 init_string 名为 'init', 专门就是用来搜索构造方法的
+
+
+
+
 
 
 
