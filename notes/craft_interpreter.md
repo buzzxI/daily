@@ -15614,9 +15614,486 @@ case CLOX_OP_INHERIT: {
 
 但是, 正因为有 override 特性, OOP 语言也支持 super 关键字, 在被 override 的方法里可以调用父类的同名方法
 
-在目前 clox 的实现中, 并没有保存指向父类的引用, 自然也是不能区分子类重写的方法和父类的方法, 不过对于所有
+在目前 clox 的实现中, 并没有保存指向父类的引用, 自然也是不能区分子类重写的方法和父类的方法, 但是注意到 compiler 在解析那些子类的时候, 首先会将父类加载到 vm stack, 然后再将子类加载到 vm stack; 而 interpreter 在执行的时候却仅仅弹栈了一次, 这意味着在子类角度的 vm stack 中额外多了一个父类的 class
 
+那么在解析子类的时候, 其实可以将父类作为 local variable 的, 任何 super 引用都将指向该 local variable
 
+```c
+// compiler.c -> class_declaration
+
+static void class_declaration() {
+    consume(CLOX_TOKEN_IDENTIFIER, "Expect class name.");
+    Token class_name = *parser->previous;
+    // append class name into constant pool (no matter it is local or global)
+    uint16_t idx = identifier_constant(&class_name);
+    // class name
+    if (idx > UINT8_MAX) emit_bytes(3, CLOX_OP_CLASS_16, idx & 0xff, idx >> 8);
+    else emit_bytes(2, CLOX_OP_CLASS, idx);
+    
+    // if class is local -> klass remain in stack (referenced as local variable)
+    // if class is global -> klass poped by define_global
+    if (current_resolver->scope_depth) {
+        declare_local();
+        define_local();
+    } else {
+        // define class as global
+        define_global(idx);
+    }
+
+    ClassResolver class;
+    class.enclose = current_class;
+    class.has_super = false;
+    current_class = &class;
+
+    if (match(CLOX_TOKEN_LESS)) {
+        consume(CLOX_TOKEN_IDENTIFIER, "Expect superclass name.");
+        if (token_equal(&class_name, parser->previous)) error_report(parser->previous, "A class can't inherit from itself.");
+
+        // load superclass from local/upvalue/global to stack
+        variable(false);
+        // leave supclass on stack and use "super" to reference
+        begin_scope();
+        add_local(&SUPER_TOKEN);
+        define_local();
+        
+        // load current class from local/upvalue/global to stack
+        named_variable(&class_name, false);
+
+        emit_byte(CLOX_OP_INHERIT);
+        current_class->has_super = true;
+    }
+
+    consume(CLOX_TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+
+    // reload klass to bind method
+    named_variable(&class_name, false);
+
+    // methods
+    while (!check(CLOX_TOKEN_EOF) && !check(CLOX_TOKEN_RIGHT_BRACE)) method();
+
+    consume(CLOX_TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+
+    // pop klass out of stack
+    emit_byte(CLOX_OP_POP);
+
+    if (current_class->has_super) end_scope();
+    current_class = current_class->enclose;
+}
+```
+
+这样对于继承了其他类的某个类, 在解析其方法之前, 就开启了一层 scope, 其中只保存了一个 local variable, 任何指向 super 引用都将指向该 local variable; 而对于没有父类的 class, 将不存在这层 scope 关系
+
+注意到 lox 中 field 是和 instance 绑定的, 而 method 才是和 klass 绑定的, 因此在使用 super 只能作为 method reference 使用, 因此对于 super token 的解析和 this token 并不相同
+
+```c
+// compiler.c -> super (partial)
+
+static void super(bool assign) {
+    if (current_class == NULL) {
+        error_report(parser->previous, "Can't use 'super' outside of a class.");
+        return;
+    } else if (!current_class->has_super) {
+        error_report(parser->previous, "Can't use 'super' in a class with no superclass.");
+        return;
+    }
+    consume(CLOX_TOKEN_DOT, "Expect '.' after 'super'.");
+    consume(CLOX_TOKEN_IDENTIFIER, "Expect superclass method name.");
+    // append property into constanct pool
+    uint16_t idx = identifier_constant(parser->previous);
+}
+```
+
+这里十分明确的需要解析到 dot 和 identifier (和 this 不同, 因为可以对 this 的 property 赋值, 但是不能对 super 的 property 赋值)
+
+因为 lox 支持 method reference, 因此 super 语句不一定都是 invocation, 还可能只是为了获取一个 reference, 但说到底上, 还是需要将方法和实际的 instance 绑定, 因此这里需要先后加载 instance 和 super klass
+
+```c
+// compiler.c -> super
+
+static void super(bool assign) {
+    if (current_class == NULL) {
+        error_report(parser->previous, "Can't use 'super' outside of a class.");
+        return;
+    } else if (!current_class->has_super) {
+        error_report(parser->previous, "Can't use 'super' in a class with no superclass.");
+        return;
+    }
+    consume(CLOX_TOKEN_DOT, "Expect '.' after 'super'.");
+    consume(CLOX_TOKEN_IDENTIFIER, "Expect superclass method name.");
+    // append property into constanct pool
+    uint16_t idx = identifier_constant(parser->previous);
+    // load current instance
+    named_variable(&THIS_TOKEN, false);
+    
+    // load super klass
+    named_variable(&SUPER_TOKEN, false);
+    if (idx > UINT8_MAX) emit_bytes(3, CLOX_OP_GET_SUPER_16, idx & 0xff, idx >> 8);
+    else emit_bytes(2, CLOX_OP_GET_SUPER, idx);
+}
+```
+
+interpreter 在解析 CLOX_OP_GET_SUPER 的时候, 需要先后弹栈, 从 super klass 中找到对应的 method, 并绑定一个 InstanceObj, 最后合成一个 MethodObj 放在栈上即可
+
+```c
+// vm.c -> run
+
+case CLOX_OP_GET_SUPER: {
+    StringObj *identifier = AS_STRING(READ_CONSTANT());
+    Value superclass = peek(0);
+    if (!IS_CLASS(superclass)) {
+        runtime_error("superclass must be a class.");
+        return INTERPRET_RUNTIME_ERROR;
+    }
+    Value instance = peek(1);
+    if (!IS_INSTANCE(instance)) {
+        runtime_error("only instances have properties.");
+        return INTERPRET_RUNTIME_ERROR;
+    }
+    ClassObj *superklass = AS_CLASS(superclass);
+    InstanceObj *instance_obj = AS_INSTANCE(instance);
+    Value method;
+
+    if (table_get(identifier, &method, &superklass->methods)) {
+        MethodObj *method_obj = new_method(instance_obj, AS_CLOSURE(method));
+        pop(); // pop superklass
+        pop(); // pop instance
+        push(OBJ_VALUE(method_obj));
+        break;
+    }
+
+    runtime_error("undefined method '%s' in superclass.", identifier->str);
+    return INTERPRET_RUNTIME_ERROR;
+}
+```
+
+类似之前优化 invocation 的地方, 这里也可以优化函数调用, 如果 compiler 识别到 '(' 就提前进行方法调用
+
+```c
+// compiler.c -> super
+
+static void super(bool assign) {
+    if (current_class == NULL) {
+        error_report(parser->previous, "Can't use 'super' outside of a class.");
+        return;
+    } else if (!current_class->has_super) {
+        error_report(parser->previous, "Can't use 'super' in a class with no superclass.");
+        return;
+    }
+    consume(CLOX_TOKEN_DOT, "Expect '.' after 'super'.");
+    consume(CLOX_TOKEN_IDENTIFIER, "Expect superclass method name.");
+    // append property into constanct pool
+    uint16_t idx = identifier_constant(parser->previous);
+    // load current instance
+    named_variable(&THIS_TOKEN, false);
+    
+    if (match(CLOX_TOKEN_LEFT_PAREN)) {
+        uint8_t arg_cnt = argument_list();
+        // load super klass
+        named_variable(&SUPER_TOKEN, false);
+        if (idx > UINT8_MAX) emit_bytes(4, CLOX_OP_INVOKE_SUPER_16, idx & 0xff, idx >> 8, arg_cnt);
+        else emit_bytes(3, CLOX_OP_INVOKE_SUPER, idx, arg_cnt);
+    } else {
+        // load super klass
+        named_variable(&SUPER_TOKEN, false);
+        if (idx > UINT8_MAX) emit_bytes(3, CLOX_OP_GET_SUPER_16, idx & 0xff, idx >> 8);
+        else emit_bytes(2, CLOX_OP_GET_SUPER, idx);
+    }
+}
+```
+
+注意这里 compiler 编译的顺序, 先将参数列表添加到 vm stack, 然后再将 super klass 添加到 vm stack 中
+
+interpreter 也不需要创建一个 MethodObj 了, 直接调用 invoke 执行即可
+
+```c
+// vm.c -> run
+
+case CLOX_OP_INVOKE_SUPER: {
+    StringObj *identifier = AS_STRING(READ_CONSTANT());
+    uint8_t *arg_cnt = read_bytes(1);
+    ClassObj *superclass = AS_CLASS(pop());
+    Value method;
+    if (!table_get(identifier, &method, &superclass->methods)) {
+        runtime_error("undefined property '%s' in superclass.", identifier->str);
+        return INTERPRET_RUNTIME_ERROR;
+    }
+    if (!invoke(AS_CLOSURE(method), *arg_cnt)) return INTERPRET_RUNTIME_ERROR;
+    frame = &vm.frames[vm.frame_cnt - 1];
+    break;
+}
+```
+
+和 CLOX_OP_INVOKE 不同的是, lox 不允许为 super method reference 赋值, 因此所有 invoke 都是针对父类的方法, 直接封装为一个 closure 即可
+
+>   super invoke 调用可行的主要原因是因为 vm stack 中的参数之上已经是 instance 了, 不需要再重写了
+
+## optimization
+
+从功能上, clox 已经完整了, 后续的优化就是在性能上的优化了, 首先就是优化 hash table
+
+### hash table
+
+identifier 保存在 constant pool 中, identifier 以字符串的形式的形式保存, 每当 lox 程序需要对变量进行操作的时候, 都需要进行一次查询, 因此优化 hash table 是很有必要的
+
+在现有的 hash table 中进行查找操作, 涉及到大量的取模操作, 包括但不限于: 计算起始位置, 计算下一个位置 (通过取模避免下标溢出)
+
+但要注意到, 在创建 hash table 的时候, clox 默认创建的 hash table 大小为 2 进制大小, 这意味着可以通过与运算优化取模操作
+
+```c
+// table.c
+
+static Entry* find_entry_by_hash(StringObj *key, Entry *entries, int size) {
+    // optimize modulo operation by bitwise AND
+    uint32_t idx = key->hash & (size - 1);
+    Entry *tombstone = NULL;
+    for (int i = 0; i < size; i++) {
+        Entry *entry = &entries[(idx + i) & (size - 1)];
+        if (entry->key == key) return entry;
+        else if (entry->key == NULL) {
+            if (IS_NIL(entry->value)) return tombstone == NULL ? entry : tombstone;
+            else if (tombstone == NULL) tombstone = entry;
+        }
+    }
+    return tombstone;
+}
+```
+
+### NaN boxing
+
+目前定义的一个 Value 大小为 16 Bytes, 其在内存中具有如下的布局:
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/02/25/20:56:28:craft_interpreter_value_in_memory.png)
+
+这个 Value 其实是有点大的, 在 clox 中, 数据的最小操作单位就是一个 Value, 如果能够想一个办法, 减少 Value 的大小, 那么就可以让 cache 中保存尽可能多 Value, 减少 cache missing 的情况
+
+从上图中也能看出来, 实际 Value 的大小为 12 Bytes, 多出来的 4 Bytes 是为了对其的要求, 那么如果要进一步减少 Value 的大小, 就需要先办法将 Value 的大小压缩到 8 Bytes
+
+在 64 位的系统中, 指针的大小就是 8 Bytes, 而 lox 中所有的数字本质上就是一个 double, 也占用 8 Bytes, 看起来, 已经没有办法进一步压缩
+
+而实际上事情并没有那么简单, 根据 [IEEE 754](https://en.wikipedia.org/wiki/IEEE_754), 每个浮点数可以被表示为: $(-1)^\textcolor{red}{\text{sign bit}}(1 + \textcolor{green}{\text{fraction}})\times2^{\textcolor{violet}{\text{exponent}} -\text{bias}}$, 通过四个部分可以确定一个浮点数, 而在这四部分中参数 `bias` 是一个确定值, 在单精度 (float) 的情况下, bias 取 127, 在双精度 (double) 的情况下 bias 取 1023
+
+>在这种二进制的表示方式中, fraction 一定是一个小数, 即保证有 $1\leq 1 + \textcolor{green}{\text{fraction}} < 2$
+
+对于任意的一个浮点数, 可变的三部分通过下图所示的方式编码:
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/12/25/10:50:57:IEEE_754.png)
+
+在单精度浮点数中, exponent 通过 8 bit 表示, 可以表示的范围为 0 ~ 255, 其中 0 和 255 具有特殊含义 (即 exponent 部分为全 0 或全 1 的情况), 保留下来不做某个浮点数表示, 实际可以表示的指数范围为 -126 ~ 127; 同理对于双精度浮点数, 11 bit 二进制表示指数的范围为 0 ~ 2047, 其中 0 和 2047 保留, 实际可以表示的指数范围为 -1022 ~ 1023
+
+>   注意到 exponent 部分本身是按照补码方式编码的 (即有正有负)
+
+在 IEEE 754 中, 存在一些特殊定义 -> NaN boxing 的关键:
+
+*   0 值: 所有 bit 均为 0
+
+*   Infinity: exponent 部分为全 1, 而 fraction 部分为全 0; sign 为 0 时表示 positive infinity, sign 为 1 时表示 negative infinity
+
+*   NaN: exponent 部分为全 1, 而 fraction 部分不全为 0 (此时 sign 部分取值不重要)
+
+    >   其实更进一步的如果 fraction 的最高位为 0 时, 被称为 signalling NaNs -> 这部分通常表示为违法计算的结果, 比如除零异常时返回的数字就是一个 signalling NaN; 而如果最高位为 1, 则被称为 quite NaNs
+
+一般而言从硬件级别上, 如果运算得到了一个 signalling NaN, 程序会被终止, 但 quite NaNs 就像它名字说的那样, 很 "安静", 程序不会异常退出; 对于 NaN 而言除了 fraction 的最高位, 借助 fraction 种剩下的部分和 sign bit 还是可以表示一个很大的范围, 在双精度浮点数中, 有 52 bit, 可以表示的范围可太大了
+
+这意味着, 同样是 8 Bytes, 不仅可以表示 IEEE 754 定义的各个浮点数, 还可以表示 $2^{53} - 1$ 种类型; 而实际中, Intel 为 fraction 部分的次高位赋予了实际意义, 为了避开这部分, 实际还可以表示的类型有: $2^{52} - 1$ (更为一般的, 就算不使用 sign bit 仅 fraction 部分也可以表示 $2^{51} - 1$ 种类型)
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/02/25/21:33:24:craft_interpreter_quite_nan.png)
+
+尽管在 64 bit 的程序中地址的大小为 8 Byte, 但实际用来寻址的部分只有低 48 bit (目前为止) -> 这样在 quite NaN 可以使用的 51 bit 中还余下了 3 bit 可以用来表示类型, 比如 nil, boolean, Obj pointers (不需要区分 number 类型, 因为只要不是 NaN 自然就是一个 number)
+
+这样计算下来, 使用 8 Bytes 表示 lox 的 Value, 居然还能允许 lox 额外在多出 5 种类型的数据
+
+NaN boxing 的优化十分依赖底层对于浮点数的支持, 不同的 CPU 对于 quite NaN 中的部分 bit 还可能留有其他用处, 因此这个优化可能并不通用, 因此这里的 NaN boxing 被做成了可选项 (通过一个宏开启)
+
+```c
+// value.h
+
+#ifdef NAN_BOXING
+typedef uint64_t Value;
+#else
+typedef struct Value {
+    ValueType type;
+    union {
+        bool boolean;
+        double number;
+        Obj *obj; 
+    } data;
+} Value;
+#endif // NAN_BOXING
+```
+
+>   NAN_BOXING 被定义在 common.h 中
+
+还好之前为 Value 定义了各种宏, 不管是 Value 转 lox 类型还是 lox 类型转 Value 都通过宏定义操作, 而没有直接操作 Value 本身, 因此这里也只需要修改各种宏即可
+
+#### number
+
+无非就是 number 转 value 或者 value 转 number, 其实就是按 bit 要么翻译为一个 uint64_t, 要么翻译为一个 double
+
+```c
+// value.h
+
+#define NUMBER_VALUE(value) number_to_value(value) 
+#define AS_NUMBER(value)    value_to_number(value)
+
+#ifdef NAN_BOXING
+static inline Value number_to_value(double value) {
+    union {
+      uint64_t bits;
+      double num;
+    } data;
+    data.num = value;
+    return data.bits;
+} 
+
+static inline double value_to_number(Value value) {
+    union {
+      uint64_t bits;
+      double num;
+    } data;
+    data.bits = value;
+    return data.num;
+}
+#endif // NAN_BOXING
+```
+
+>   原书中, 通过 memcpy 完成的赋值, 但这里通过一个 union 实现
+
+除此之外还需要判断当前 value 是否是一个数字, 这里其实就是判断一下当前 value 的 exponent bit 是否被置位即可
+
+```c
+// value.h
+
+#define QNAN      ((uint64_t)0x7ffc000000000000)
+
+#define IS_NUMBER(value)    (((value) & QNAN) != QNAN)
+```
+
+>   这里的 QNAN bit 包含了 quiet bit 和 Intel FP Indef bit
+
+#### nil & false & true
+
+使用 fraction 部分的低 2 bit 表示类型
+
+```c
+// value.h
+
+#define TAG_NIL   0x1
+#define TAG_FALSE 0x2
+#define TAG_TRUE  0x3
+```
+
+这样其实宏定义也很好写, 配合 QNAN 即可
+
+```c
+// value.h
+
+#define NIL_VALUE           ((Value)(uint64_t)(QNAN | TAG_NIL))
+#define IS_NIL(value)       ((uint64_t)(value) == NIL_VALUE)
+#define FALSE_VALUE         ((Value)(uint64_t)(QNAN | TAG_FALSE))
+#define TRUE_VALUE          ((Value)(uint64_t)(QNAN | TAG_TRUE))
+#define BOOL_VALUE(value)   ((value) ? TRUE_VALUE : FALSE_VALUE)
+#define AS_BOOL(value)      ((value) == TRUE_VALUE)
+#define IS_BOOL(value)      (((value) | 1) == TRUE_VALUE)
+```
+
+在 lox 中除了 bool true 之外, 剩下的值都是 false, 所以在将 lox bool 转化为 c bool 的时候, 只需要比较 lox bool 是否为 TRUE_VALUE 即可
+
+最后一个宏定义 IS_BOOL 巧妙的通过位运算避开了两次比较, 一次比较即可判断类型 (这个其实和 boolean 类型的 TAG 涉及也有关)
+
+#### object
+
+如果是 object 类型, value 保存的是一个地址, 这里 clox 使用 sign bit 表示 object 类型 (和之前的 bool, nil 类型做区分), 而 fraction 的低 48 bit 用作保存指针地址
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/02/25/22:06:16:craft_interpreter_nan_boxing_object_pointers.png)
+
+因此将一个 c 指针转化为 value 类型其实还挺简单的
+
+```c
+// value.h
+#define SIGN_BIT  ((uint64_t)0x8000000000000000)
+
+#define OBJ_VALUE(value)    (Value)(SIGN_BIT | QNAN | (uint64_t)(uintptr_t)(value))
+```
+
+>   反正就是将指针的高位全置为 1
+
+而检查一个 value 类型是否为 object 类型也很简单, 类似上面检查是否为 number 类型, 这里同时检查 sign bit 和 QNAN bits
+
+```c
+// value.h
+
+#define AS_OBJ(value)       ((Obj*)(uintptr_t)((value) & ~(SIGN_BIT | QNAN)))
+#define IS_OBJ(value)       (((value) & (QNAN | SIGN_BIT)) == (QNAN | SIGN_BIT))
+```
+
+#### other fixes
+
+也没剩啥了, 看看现在还有那些报错, 比如打印 value 的那个函数
+
+```c
+// value.c
+
+void print_value(Value value) {
+#ifdef NAN_BOXING
+    if (IS_BOOL(value)) printf(AS_BOOL(value) ? "true" : "false");
+    else if (IS_NIL(value)) printf("nil");
+    else if (IS_NUMBER(value)) printf("%g", AS_NUMBER(value));
+    else if (IS_OBJ(value)) print_obj(value);
+#else
+    switch (value.type) {
+        case VAL_BOOL:
+            printf(AS_BOOL(value) ? "true" : "false");
+            break;
+        case VAL_NUMBER:
+            printf("%g", AS_NUMBER(value));
+            break;
+        case VAL_NIL:
+            printf("nil");
+            break;
+        case VAL_OBJ:
+            print_obj(value);
+            break;
+    }
+#endif // NAN_BOXING
+}
+```
+
+之前 value 有一个 type 字段, 现在没有这个字段了, 就只能通过 if-else 来判断了
+
+```c
+// value.c
+
+bool values_equal(Value a, Value b) {
+#ifdef NAN_BOXING
+    // NaN is not equal to NaN
+    if (IS_NUMBER(a) && IS_NUMBER(b)) return AS_NUMBER(a) == AS_NUMBER(b);
+    return a == b;
+#else
+    if (a.type != b.type) return false;
+    switch (a.type) {
+        case VAL_BOOL: return AS_BOOL(a) == AS_BOOL(b);
+        case VAL_NUMBER: return AS_NUMBER(a) == AS_NUMBER(b);
+        case VAL_NIL: return true;
+        case VAL_OBJ: return objs_equal(a, b);
+    }
+#endif // NAN_BOXING
+    
+    return false;
+}
+```
+
+还有就是比较 value, 现在不管是什么 value 都是通过 8 Bytes 记录的, 直接比较 value 实际的值即可; 但要注意上面特殊处理了 a 和 b 为 number 的情况
+
+这是因为在 IEEE 754 中, 除 0 导致 NaN != NaN, 考虑下面的程序:
+
+```lox
+var nan = 0 / 0;
+print nan == nan;
+```
+
+如果 lox 符合 IEEE 754 规范, 那么该段程序应该打印 false; 因为这是 signalling NaN 之间的比较, 应该借助浮点数底层的实现逻辑 -> 需要将其转发为浮点数然后再比较
+
+而如果直接比较 a 和 b, 那么会直接返回 true
 
 
 

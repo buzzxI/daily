@@ -2358,12 +2358,16 @@ readelf 是专门用来解析 ELF 文件信息的工具
 然后就是一些特殊情况:
 
 *   0 值: 不管是单精度函数双精度, 只要所有位都是 0 就表示该值为 0 值
+
 *   Infinity: (biased) exponent 为全 1 (在单精度中为 255, 在双精度中为 2047), 而 fraction 为全 0; 此时根据 sign bit 决定是 positive infinity (sign bit 为 0) 或者是 negative infinity (sign bit 为 1)
+
 *   NaN (not a number): (biased) exponent 为全 1 (在单精度中为 255, 在双精度中为 2047), fraction 可以为除了全 0 之外的任意值, sign bit 的可为 0 也可为 1
 
->   从表示形式上, Infinity 和 NaN 最大的区别在于, Infinity 的 fraction 部分一定为全 0, 而 NaN 的 fraction 部分一定不能是全 0
->
->   NaN 用来表示非法操作, 最典型的 dividing by zero, 由于 NaN 实际可以表示的范围很大 (单精度有 23 bit, 双精度有 52 bit), 因此有一种被称为 NaN Boxing 的技术, 可以通过浮点数表示任意的类型
+    >   其实更进一步的如果 fraction 的最高位为 0 时, 被称为 signalling NaNs -> 这部分通常表示为违法计算的结果, 比如除零异常时返回的数字就是一个 signalling NaN; 而如果最高位为 1, 则被称为 quite NaNs
+
+从表示形式上, Infinity 和 NaN 最大的区别在于, Infinity 的 fraction 部分一定为全 0, 而 NaN 的 fraction 部分一定不能是全 0
+
+NaN 用来表示非法操作, 最典型的 dividing by zero, 由于 NaN 实际可以表示的范围很大 (单精度有 23 bit, 双精度有 52 bit), 因此有一种被称为 NaN Boxing 的技术, 可以通过浮点数表示任意的类型
 
 考虑一个例子: 0.085
 
