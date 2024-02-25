@@ -15313,7 +15313,6 @@ static void class_declaration() {
     // pop klass out of stack
     emit_byte(CLOX_OP_POP);
 
-    if (current_class->has_super) end_scope();
     current_class = current_class->enclose;
 }
 ```
@@ -15361,6 +15360,265 @@ static void this(bool assign) {
 ```
 
 >   在 vm 中保存了一个 init_string 名为 'init', 专门就是用来搜索构造方法的
+
+lox 禁止在 initializer 中显式通过 return 返回任何类型, 如果 lox 程序要么直接 return (没有返回值), 要么不写 return, compiler 通过在 return_statement 中进行检查实现这一点
+
+```c
+// compiler.c -> return_statement
+
+static void return_statement() {
+    if (current_resolver->type == TYPE_SCRIPT) error_report(parser->previous, "Can't return from top-level code.");
+    else {
+        if (match(CLOX_TOKEN_SEMICOLON)) emit_nil_return();
+        else {
+            if (current_resolver->type == TYPE_INITIALIZER) error_report(parser->previous, "Can't return a value from an initializer.");
+            else {
+                expression();        
+                consume(CLOX_TOKEN_SEMICOLON, "Expect ';' after return statement");
+                emit_return();
+            }
+        }
+    }
+}
+```
+
+对于 initializer 而言, 其 function type 会被主动写为 TYPE_INITIALIZER, 这里是通过硬编码比较方法名实现
+
+```c
+// compiler.c -> method
+
+static void method() {
+    // method name
+    consume(CLOX_TOKEN_IDENTIFIER, "Expect method name.");
+    uint16_t identifier = make_constant(OBJ_VALUE(new_string(parser->previous->lexeme, parser->previous->length)));
+
+    // initializer
+    if (parser->previous->length == 4 && memcmp("init", parser->previous->lexeme, parser->previous->length) == 0) function(TYPE_INITIALIZER);
+    // normal body
+    else function(TYPE_METHOD);
+    
+    if (identifier > UINT8_MAX) emit_bytes(3, CLOX_OP_METHOD_16, identifier & 0xff, identifier >> 8);
+    else emit_bytes(2, CLOX_OP_METHOD, identifier);
+}
+```
+
+为了让 initializer 可以返回一个 instance, 这里 compiler 会在 emit_nil_return 中针对 initializer 添加一个返回值
+
+```c
+// compiler.c -> emit_nil_return
+
+static void emit_nil_return() {
+    // for initializer, slot 0 is instance
+    if (current_resolver->type == TYPE_INITIALIZER) emit_bytes(2, CLOX_OP_GET_LOCAL, 0);
+    else emit_byte(CLOX_OP_NIL);
+    emit_return();
+}
+```
+
+因为既然是 method 的一种, 显然在运行的时候, slot 0 的为止保存的就是当前对象, 因此这里的返回值直接来自于当前方法调用的栈中
+
+### optimized invocation
+
+目前为止 clox 通过 CLOX_OP_GET_PROPERTY 加载 MethodObj 到 vm stack 中, 然后根据 CLOX_OP_CALL 执行函数调用
+
+整个方法调用分为两条字节码执行, 但事实上, compiler 在遇到 method name 时可以直接识别为 method call
+
+```c
+// compiler.c -> dot
+
+static void dot(bool assign) {
+    consume(CLOX_TOKEN_IDENTIFIER, "Expect property name after '.'.");
+    // append previous token into constant pool
+    uint16_t idx = identifier_constant(parser->previous); 
+    if (assign && match(CLOX_TOKEN_EQUAL)) {
+        expression();
+        // set property
+        if (idx > UINT8_MAX) emit_bytes(3, CLOX_OP_SET_PROPERTY_16, idx & 0xff, idx >> 8);
+        else emit_bytes(2, CLOX_OP_SET_PROPERTY, idx);
+    } else {
+        if (match(CLOX_TOKEN_LEFT_PAREN)) {
+            // method call
+            uint8_t arg_cnt = argument_list();
+            if (idx > UINT8_MAX) emit_bytes(4, CLOX_OP_INVOKE_16, idx & 0xff, idx >> 8, arg_cnt);
+            else emit_bytes(3, CLOX_OP_INVOKE, idx, arg_cnt);
+        } else {
+            // get property
+            if (idx > UINT8_MAX) emit_bytes(3, CLOX_OP_GET_PROPERTY_16, idx & 0xff, idx >> 8);
+            else emit_bytes(2, CLOX_OP_GET_PROPERTY, idx);
+        }
+    }
+}
+```
+
+如果 method name 后紧挨着一个 '(' 就将其识别为一个 method call, 使用一个新的字节码指令 CLOX_OP_INVOKE 进行方法调用
+
+当 vm 执行到该条字节码时, 栈空间如下: [xxx | instance | arg1 | arg2 | ... | argn]
+
+这个字节码长度为 3, 格式为: CLOX_OP_INVOKE, method_name, arg_cnt; 其中 method name 保存在常量池中
+
+因此 vm 在执行时, 首先需要从常量池中获取对应的 name, 同时根据 arg_cnt 找到调用该方法的 instance; 这样便可以通过 instance 找到实际的 klass 了, 自然使用 method name 为 key, 从 klass 的 methods 中找到对应的 method
+
+```c
+// vm.c -> run
+
+case CLOX_OP_INVOKE: {
+    StringObj *identifier = AS_STRING(READ_CONSTANT());
+    uint8_t *arg_cnt = read_bytes(1);
+    Value instance = peek(*arg_cnt);
+    if (!IS_INSTANCE(instance)) {
+        runtime_error("only instances have methods.");
+        return INTERPRET_RUNTIME_ERROR;
+    }
+
+    Value method;
+    InstanceObj *instance_obj = AS_INSTANCE(instance);
+    
+    ClassObj *klass = instance_obj->klass;
+    if (!table_get(identifier, &method, &klass->methods)) {
+        runtime_error("undefined property '%s'.", identifier->str);
+        return INTERPRET_RUNTIME_ERROR;
+    }
+    if (!invoke(AS_CLOSURE(method), *arg_cnt)) return INTERPRET_RUNTIME_ERROR;
+    
+    frame = &vm.frames[vm.frame_cnt - 1];
+    break;
+}
+```
+
+这里并没有对 method 进行额外的封装, 而是直接调用, 因此 compiler 在识别这个语句的时候, vm stack 一定具有上面的结构, 即参数列表之前已经是 instance 了 -> function frame stack 的 slot 0 处已经是一个 instance 了
+
+lox 本身是支持 function reference 的, 如果使用了上面的优化, vm 在运行的时候会直接落入 if 分支, 将 function reference 视为 undefined property
+
+这里可以采用之前在 vm 遇到 CLOX_OP_GET_PROPERTY 时的处理方式, 让 vm 首先在 instance 内部的 fields 中查找, 然后再从 klass 中的 methods 中查找
+
+```c
+// vm.c -> run
+
+case CLOX_OP_INVOKE: {
+    StringObj *identifier = AS_STRING(READ_CONSTANT());
+    uint8_t *arg_cnt = read_bytes(1);
+    Value instance = peek(*arg_cnt);
+    if (!IS_INSTANCE(instance)) {
+        runtime_error("only instances have methods.");
+        return INTERPRET_RUNTIME_ERROR;
+    }
+
+    Value method;
+    InstanceObj *instance_obj = AS_INSTANCE(instance);
+    // lox may have function reference as field
+    if (table_get(identifier, &method, &instance_obj->fields)) {
+        // overwrite instance into method
+        vm.sp[-1 - *arg_cnt] = method;
+        if (!function_call(method, *arg_cnt)) return INTERPRET_RUNTIME_ERROR;
+    } else {
+        ClassObj *klass = instance_obj->klass;
+        if (!table_get(identifier, &method, &klass->methods)) {
+            runtime_error("undefined property '%s'.", identifier->str);
+            return INTERPRET_RUNTIME_ERROR;
+        }
+        if (!invoke(AS_CLOSURE(method), *arg_cnt)) return INTERPRET_RUNTIME_ERROR;
+    }
+    frame = &vm.frames[vm.frame_cnt - 1];
+    break;
+}
+```
+
+具体的方法调用的合法性检查交给了 function_call 负责
+
+### inheritance
+
+clox 需要支持的下一个 OOP 特性就是继承, 在 lox 语法中通过 '<' 识别继承关系, 继承关系的声明放在了 class_declaration 中
+
+```c
+// compiler.c -> class_declaration
+
+static void class_declaration() {
+    consume(CLOX_TOKEN_IDENTIFIER, "Expect class name.");
+    Token class_name = *parser->previous;
+    // append class name into constant pool (no matter it is local or global)
+    uint16_t idx = identifier_constant(&class_name);
+    // class name
+    if (idx > UINT8_MAX) emit_bytes(3, CLOX_OP_CLASS_16, idx & 0xff, idx >> 8);
+    else emit_bytes(2, CLOX_OP_CLASS, idx);
+    
+    // if class is local -> klass remain in stack (referenced as local variable)
+    // if class is global -> klass poped by define_global
+    if (current_resolver->scope_depth) {
+        declare_local();
+        define_local();
+    } else {
+        // define class as global
+        define_global(idx);
+    }
+
+    ClassResolver class;
+    class.enclose = current_class;
+    class.has_super = false;
+    current_class = &class;
+
+    if (match(CLOX_TOKEN_LESS)) {
+        consume(CLOX_TOKEN_IDENTIFIER, "Expect superclass name.");
+        if (token_equal(&class_name, parser->previous)) error_report(parser->previous, "A class can't inherit from itself.");
+        // load superclass from local/upvalue/global to stack
+        variable(false);      
+        // load current class from local/upvalue/global to stack
+        named_variable(&class_name, false);
+        emit_byte(CLOX_OP_INHERIT);
+        current_class->has_super = true;
+    }
+
+    consume(CLOX_TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+
+    // reload klass to bind method
+    named_variable(&class_name, false);
+
+    // methods
+    while (!check(CLOX_TOKEN_EOF) && !check(CLOX_TOKEN_RIGHT_BRACE)) method();
+
+    consume(CLOX_TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
+
+    // pop klass out of stack
+    emit_byte(CLOX_OP_POP);
+
+    current_class = current_class->enclose;
+}
+```
+
+看起来就是在解析到 '<' 的时候额外添加了一个字节码指令, 同时加载父类 class 和当前类 class 进入 vm stack
+
+lox 的继承只会让子类继承父类的方法, 因此 vm 在遇到 CLOX_OP_INHERITANCE 时会将父类的全部方法加载到子类中
+
+```c
+// vm.c -> run
+
+case CLOX_OP_INHERIT: {
+    Value superclass = peek(1);
+    if (!IS_CLASS(superclass)) {
+        runtime_error("superclass must be a class.");
+        return INTERPRET_RUNTIME_ERROR;
+    }
+    Value subclass = peek(0);
+    ClassObj *superklass = AS_CLASS(superclass);
+    ClassObj *subklass = AS_CLASS(subclass);
+    table_put_all(&subklass->methods, &superklass->methods);
+    pop(); // pop subclass
+    break;
+}
+```
+
+>   注意到上面弹栈的时候仅仅将 subclass (当前 class) 弹栈了, 而将 superclass 保存在 vm stack 中, 这是有意为之的
+
+### super call
+
+和一般的 OOP 语言相同, lox 支持 override, 父类的方法可以被子类覆盖, compiler 和 interpreter 目前可以正确处理这个情况, interpreter 首先将继承的 method 保存在 hash table 中, 后续的同名方法会直接覆盖掉
+
+但是, 正因为有 override 特性, OOP 语言也支持 super 关键字, 在被 override 的方法里可以调用父类的同名方法
+
+在目前 clox 的实现中, 并没有保存指向父类的引用, 自然也是不能区分子类重写的方法和父类的方法, 不过对于所有
+
+
+
+
 
 
 
