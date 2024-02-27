@@ -1,3 +1,10 @@
+在 windows 中, 使能了 wsl 之后, 就可以使用 docker desktop 了, 安装之后, 默认创建了两个 distro, docker-desktop 和 docker-desktop-data, 分别用来:
+
+*   run docker engine (dockerd)
+*   store containers and images
+
+这两个 distro 默认保存在了 c 盘下的某个 docker 目录下面, 在最新版的 docker desktop 中, 可以对该路径进行重新配置 
+
 # 一些概念
 
 主要参考：[Overview | Docker Documentation](https://docs.docker.com/get-started/)
