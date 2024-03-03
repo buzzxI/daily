@@ -4285,14 +4285,14 @@ mybatis:
 
 # Security
 
-## 整合SpringSecurity
+## 整合 SpringSecurity
 
-Spring Security 基于 Spring 框架，提供了一套 Web 应用安全性的完整解决方案。
+Spring Security 基于 Spring 框架，提供了一套 Web 应用安全性的完整解决方案
 
 关于安全方面的两个主要区域是“认证”和“授权”
 
-* 认证Authentication：验证某个用户是否为系统中的合法主体，也就是说用户能否访问该系统。用户认证一般要求用户提供用户名和密码。系统通过校验用户名和密码来完成认证过程。就是**系统认为用户是否能登陆。**
-* 授权Authorization：验证某个用户是否有权限执行某个操作。在一个系统中，不同用户说具有的权限是不同的。比如对一个文件夹来说，有的用户只能进行读取，有的用户可以进行修改。一般来说，系统不会为不同的用户分配不同的角色，就是**系统判断用户是否有权限去做某些事情。**
+* 认证 Authentication：验证某个用户是否为系统中的合法主体，也就是说用户能否访问该系统。用户认证一般要求用户提供用户名和密码。系统通过校验用户名和密码来完成认证过程。就是**系统认为用户是否能登陆。**
+* 授权 Authorization：验证某个用户是否有权限执行某个操作。在一个系统中，不同用户说具有的权限是不同的。比如对一个文件夹来说，有的用户只能进行读取，有的用户可以进行修改。一般来说，系统不会为不同的用户分配不同的角色，就是**系统判断用户是否有权限去做某些事情。**
 
 首先引入pom依赖：
 
@@ -4305,7 +4305,7 @@ Spring Security 基于 Spring 框架，提供了一套 Web 应用安全性的完
 
 ### 一个简化的例子
 
-为了实现权限控制，需要设置一个配置类继承`WebSecurityConfigurerAdapter`类
+为了实现权限控制，需要设置一个配置类继承 `WebSecurityConfigurerAdapter` 类
 
 #### 授权
 
@@ -4758,6 +4758,14 @@ http.authorizeRequests()
 #### hasAnyRole
 
 这个方法和hasAnyAuthority差不多
+
+## without WebSecurityConfigurerAdapter
+
+是的这个类被弃用了, [Spring Security without the WebSecurityConfigurerAdapter](https://spring.io/blog/2022/02/21/spring-security-without-the-websecurityconfigureradapter)
+
+官方系统通过注入 bean (安全组件) 的方式配置 spring security
+
+
 
 ## shiro
 

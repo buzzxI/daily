@@ -7866,9 +7866,341 @@ class Solution {
 }
 ```
 
+# [第 387 场周赛](https://leetcode.cn/contest/weekly-contest-387)
 
+## [100243. 将元素分配到两个数组中 I](https://leetcode.cn/contest/weekly-contest-387/problems/distribute-elements-into-two-arrays-i/)
 
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/contest/weekly-contest-387/problems/distribute-elements-into-two-arrays-i/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/03/14:56:24:100243.png" />
+	</a>
+</div>
 
+签到模拟题
+
+```java
+class Solution {
+    public int[] resultArray(int[] nums) {
+        List<Integer> arr1 = new ArrayList<>();
+        List<Integer> arr2 = new ArrayList<>();
+        arr1.add(nums[0]);
+        arr2.add(nums[1]);
+        
+        int n = nums.length;
+        for (int i = 2; i < n; i++) {
+            int v1 = arr1.get(arr1.size() - 1);
+            int v2 = arr2.get(arr2.size() - 1);
+            if (v1 > v2) arr1.add(nums[i]);
+            else arr2.add(nums[i]);
+        }
+        
+        int[] rst = new int[n];
+        int idx = 0;
+        for (int i = 0; i < arr1.size(); i++) rst[idx++] = arr1.get(i);
+        for (int i = 0; i < arr2.size(); i++) rst[idx++] = arr2.get(i);
+        return rst;
+    }
+}
+```
+
+## [100237. 元素和小于等于 k 的子矩阵的数目](https://leetcode.cn/contest/weekly-contest-387/problems/count-submatrices-with-top-left-element-and-sum-less-than-k/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/contest/weekly-contest-387/problems/count-submatrices-with-top-left-element-and-sum-less-than-k/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/03/14:59:04:100237.png" />
+	</a>
+</div>
+
+本来以为很难, 之前做过的类似的题目, 优化的思路是枚举上下边界和右边界, 而左边界可以通过二分的方式计算得到, 整体时间复杂度$O(n^2m\log m)$, 而因为 n 和 m 可以取到 $10^3$ 因此优化之后还是会超时 ...
+
+直到看到题目要求中, 结果集**必须包含左上角的元素** ...
+
+这样就算使用最暴力的方式, 也不过是枚举矩阵的右边界, 整体时间降低为 $O(nm)$
+
+```java
+class Solution {
+    public int countSubmatrices(int[][] grid, int k) {
+        int n = grid.length;
+        int m = grid[0].length;
+        
+        // 二维前缀和
+        int[][] pre = new int[n + 1][m + 1];
+        for (int i = 1; i <= n; i++) {
+            for (int j = 1; j <= m; j++) pre[i][j] = pre[i - 1][j] + pre[i][j - 1] + grid[i - 1][j - 1] - pre[i - 1][j - 1];
+        }
+        
+        // 枚举下边界并二分查找右边界
+        int rst = 0;
+        for (int i = 1; i <= n; i++) {
+            int l = 1, r = m;
+            while (l < r) {
+                int mid = l + ((r - l + 1) >> 1);
+                int sum = pre[i][mid];
+                if (pre[i][mid] > k) r = mid - 1;
+                else l = mid;
+            }
+            if (pre[i][l] <= k) rst += l;
+        }
+        
+        return rst;
+    }
+}
+```
+
+## [100234. 在矩阵上写出字母 Y 所需的最少操作次数](https://leetcode.cn/contest/weekly-contest-387/problems/minimum-operations-to-write-the-letter-y-on-a-grid/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/contest/weekly-contest-387/problems/minimum-operations-to-write-the-letter-y-on-a-grid/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/03/15:07:50:100234.png" />
+	</a>
+</div>
+
+一共只有三种数字, 并且两个块中的数字还不能相同, 因此一共只有 6 种组合方式, 每种都计算一下看看哪个最小就好了
+
+```java
+class Solution {
+    private static final int INF = 0x3f3f3f3f;
+    public int minimumOperationsToWriteY(int[][] grid) {
+        // 计算整个块中各个数字出现的频率
+        int[] freq = new int[3];
+        // 计算 Y 块中各个数字出现的频率
+        int[] ys = new int[3];
+        int n = grid.length;
+        int half = n >> 1;
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                freq[grid[i][j]]++;
+                if (i == j && i <= half) ys[grid[i][j]]++;
+                else if (i + j == n - 1 && i <= half) ys[grid[i][j]]++;
+                else if (i >= half && j == half) ys[grid[i][j]]++;
+            }
+        }
+		
+        // 计算 Y 块之外各个数字出现的频率
+        int[] re = new int[3];
+        int t_y = 0;
+        for (int i = 0; i < 3; i++) {
+            re[i] = freq[i] - ys[i];
+            t_y += ys[i];
+        }
+
+        // 从整个循环之后, ys[i] 和 re[i] 分别表示将对应块变为 i 需要改变数字的个数
+        int t_r = n * n  - t_y;
+        for (int i = 0; i < 3; i++) {
+            ys[i] = t_y - ys[i];
+            re[i] = t_r - re[i];
+        }
+		
+        // 枚举 6 种情况
+        int rst = INF;
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                if (i == j) continue;
+                rst = Math.min(rst, ys[i] + re[j]);
+            }
+        }
+
+        return rst;
+    }
+}
+```
+
+## [100246. 将元素分配到两个数组中 II](https://leetcode.cn/contest/weekly-contest-387/problems/distribute-elements-into-two-arrays-ii/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/contest/weekly-contest-387/problems/distribute-elements-into-two-arrays-ii/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/03/15:15:17:100246.png" />
+	</a>
+</div>
+暴力线段树, $O(\log n)$ 的时间内完成修改, $O(\log n)$ 完成查询
+
+```java
+class Solution {
+    private static final int N = (int)1e9 + 10;
+
+    public int[] resultArray(int[] nums) {
+        Node a1 = new Node();
+        Node a2 = new Node();
+
+        List<Integer> arr1 = new ArrayList<>();
+        List<Integer> arr2 = new ArrayList<>();
+		
+        // 初始化
+        add(a1, 0, N, nums[0]);
+        add(a2, 0, N, nums[1]);
+        arr1.add(nums[0]);
+        arr2.add(nums[1]);
+        
+        int n = nums.length;
+        for (int i = 2; i < n; i++) {
+            // 区间查询
+            int v1 = query(a1, 0, N, nums[i] + 1, N);
+            int v2 = query(a2, 0, N, nums[i] + 1, N);
+
+            int flag = 0;
+            int s1 = arr1.size();
+            int s2 = arr2.size();
+            if (v1 > v2 || (v1 == v2 && s1 <= s2)) flag = 1;
+		
+            // 区间更新
+            if (flag == 1) {
+                arr1.add(nums[i]);
+                add(a1, 0, N, nums[i]);
+            } else {
+                arr2.add(nums[i]);
+                add(a2, 0, N, nums[i]);
+            }
+        }
+        int[] rst = new int[n];
+        int idx = 0;
+
+        for (int i = 0; i < arr1.size(); i++) rst[idx++] = arr1.get(i);
+        for (int i = 0; i < arr2.size(); i++) rst[idx++] = arr2.get(i);
+        return rst;
+    }
+
+    private void add(Node n, int l, int r, int idx) {
+        if (l == r && l == idx) {
+            n.val ++;
+            n.lazy ++;
+            return;
+        }
+		// 懒加载
+        create_lazy(n);
+        // 下发 lazy 标记
+        push_lazy(n);
+        int m = l + ((r - l) >> 1);
+        if (idx <= m) add(n.l, l, m, idx);
+        else add(n.r, m + 1, r, idx);
+        n.val = n.l.val + n.r.val;
+    }
+
+    private int query(Node n, int l, int r, int s, int e) {
+        if (s <= l && e >= r) return n.val;
+        create_lazy(n);
+        push_lazy(n);
+        int m = l + ((r - l) >> 1);
+        int rst = 0;
+        if (s <= m) rst += query(n.l, l, m, s, e);
+        if (e > m) rst += query(n.r, m + 1, r, s, e);
+        return rst;
+    }
+
+    private void create_lazy(Node n) {
+        if (n.l == null) n.l = new Node();
+        if (n.r == null) n.r = new Node();
+    }
+
+    private void push_lazy(Node n) {
+        if (n.lazy != 0) {
+            n.l.lazy += n.lazy;
+            n.r.lazy += n.lazy;
+            n.l.val += n.lazy;
+            n.r.val += n.lazy;
+            n.lazy = 0;
+        }
+    }
+}
+
+class Node {
+    Node l;
+    Node r;
+    int val;
+    int lazy;
+}
+```
+
+因为是单点修改, 甚至都不需要 lazy 标记, 也正是因为单点修改, 因此还可以使用树状数组, 此外因为输入范围太大了 $10^9$ 因此还需要离散化
+
+```java
+class Solution {
+    private int[] hash;
+    public int[] resultArray(int[] nums) {
+        int n = nums.length;
+        // 排序并去重
+        this.hash = Arrays.stream(nums).sorted().distinct().toArray();
+        
+        int[] t1 = new int[n + 10];
+        int[] t2 = new int[n + 10];
+        
+        List<Integer> l1 = new ArrayList<>();
+        List<Integer> l2 = new ArrayList<>();
+        
+        int max = 0;
+        for (int num : nums) max = Math.max(max, num);
+        
+        l1.add(nums[0]);
+        l2.add(nums[1]);
+        add(nums[0], t1);
+        add(nums[1], t2);
+        
+        for (int i = 2; i < n; i++) {
+            // 查询
+            int v1 = query(max, t1) - query(nums[i], t1);
+            int v2 = query(max, t2) - query(nums[i], t2);
+            
+            int s1 = l1.size();
+            int s2 = l2.size();
+            
+            int flag = 0;
+            if (v1 > v2 || (v1 == v2 && s1 <= s2)) flag = 1;
+            
+            // 更新
+            if (flag == 1) {
+                l1.add(nums[i]);
+                add(nums[i], t1);
+            } else {
+                l2.add(nums[i]);
+                add(nums[i], t2);
+            }
+        }
+        
+        int[] rst = new int[n];
+        int idx = 0;
+        for (int num : l1) rst[idx++] = num;
+        for (int num : l2) rst[idx++] = num;
+        
+        return rst;
+    }
+    
+    private void add(int x, int[] t) {
+        x = map(x);
+        while (x < t.length) {
+            t[x] ++;
+            x += lowbit(x);
+        }
+    }
+    
+    // 返回一个前缀和
+    private int query(int x, int[] t) {
+        int rst = 0;
+        x = map(x);
+        while (x > 0) {
+            rst += t[x];
+            x -= lowbit(x);
+        }
+        return rst;
+    }
+    
+    private int lowbit(int x) {
+        return x & (-x);
+    }
+    
+    private int map(int x) {
+        int l = 0, r = hash.length - 1;
+        
+        while (l < r) {
+            int m = l + ((r - l) >> 1);
+            if (hash[m] < x) l = m + 1;
+            else r = m;
+        }
+        // map to 1 ~ n
+        return l + 1;
+    }
+}
+```
+
+在使用树状数组的时候, 要注意下标需要从 1 开始, 因此在离散函数 map 中返回值最后 + 1
 
 
 

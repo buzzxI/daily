@@ -957,5 +957,59 @@ public enum PostState implements StringValueEnum, IntValueEnum{
 }
 ```
 
+# spring security & jwt
 
+整体分为两部分: authentication (认证) 和 authorization (授权)
+
+一般而言 jwt 包含了用户的身份信息, 可以被认为是一个用户凭证, 整体流程如下:
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/02/21:06:58:jwt_authentication.png)
+
+当用户登录后, server 会向 client 返回一个表明了用户身份的 jwt (存放在 header 中); 后续 client 的请求, 只要携带了该 jwt 就表明了用户的身份
+
+一般而言 server 可以根据 jwt 对用户行为进行控制, 限制用户的访问: allow access to the resource or denie
+
+jwt 即 json web token, 本身由三部分组成: header, payload, signature
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/02/21:39:51:jwt_structure.png)
+
+其中 header 和 payload 是明文信息, 在 jwt 中仅仅进行了编码, 没有加密; 而 signature 部分是有前两部分经由 secret key 加密得到的, 该 secret key 应该保存在 server 端 (不能被 client 得知) 
+
+signature 部分并不能对 header 和 payload 进行加密, 其更多的作用是数字水印, 当 server 收到了来自 client 的一个 jwt 后, 会再次对 header 和 payload 通过 secret key 进行加密, 并将其和 signature 进行校验, 只有校验通过的 jwt 才会被 server 认可
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/02/21:47:07:jwt_validation.png)
+
+一般而言 secret key 是随机生成的, copilot 给出了一个 python 程序用来生成该 key
+
+```python
+import secrets
+
+# Generate a random JWT secret key (32 bytes)
+jwt_secret_key = secrets.token_hex(32)
+
+# Print the generated secret key
+print(f"Generated JWT secret key: {jwt_secret_key}")
+```
+
+上述流程其实不重要, 因为在最新的 jjwt 验证中, 已经弃用了这种方式, 而强制要求用户必须使用 private key 和 public key pair; 任何的 client 都可以使用 public key 对签名进行验证, 而 server 需要使用 private key 进行签名; 
+
+这种 key pair 也是比较基本的非对称加密, 一般的使用 rsa 的方式生成即可 (ssh-keygen 也行)
+
+```python
+import rsa
+
+# Generate an RSA key pair
+(public_key, private_key) = rsa.newkeys(2048)
+
+# Save the keys to files
+with open("public_key.pem", "wb") as public_key_file:
+    public_key_file.write(public_key.save_pkcs1())
+
+with open("private_key.pem", "wb") as private_key_file:
+    private_key_file.write(private_key.save_pkcs1())
+
+print("RSA key pair generated and saved as public_key.pem and private_key.pem")
+```
+
+>   这里需要 python 环境 rsa, 不管是 pip 还是 conda 反正装上才能用
 
