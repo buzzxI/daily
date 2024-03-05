@@ -7866,6 +7866,51 @@ class Solution {
 }
 ```
 
+# [第 125 场双周赛](https://leetcode.cn/contest/biweekly-contest-125/)
+
+
+
+## [3068. 最大节点价值之和 (Find the Maximum Sum of Node Values)](https://leetcode.cn/classic/problems/find-the-maximum-sum-of-node-values/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/find-the-maximum-sum-of-node-values/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/04/11:23:15:3068.png" />
+	</a>
+</div>
+有的时候题目并不直接, 需要发现一些性质, 本题的关键点在于异或, 一个数字异或偶数次后, 会变回本身
+
+本题的连通图是一棵树, 那么对于树中任意两个节点都存在一条路径, 本题的第一个性质是, 对于任意两个节点, 通过按照路径进行异或, 最终的结果一定是只有路径两端的节点进行了异或, 而路径上其他的节点不变, 即**任意两个节点之间都存在一条等效的可以进行异或的边**
+
+根据这个性质, 其实就不需要考虑树的具体连接情况了, 毕竟任意两个节点之间都存在一个等效边
+
+本题的第二个性质是, 不管怎么操作, 整棵树中参与异或运算的节点一定是偶数个, 异或操作无外乎操作有三种情况:
+
+*   边两端的节点均未参与过异或
+*   边两端的节点均参与过异或
+*   边两端的节点其中之一参与异或
+
+对于前两种情况, 分别会让参与异或的节点增加两个/减少两个; 而第三种情况, 会让参与异或的节点数量不变
+
+所以现在的问题就变为了, 给定数组, 让其中偶数个元素参与运算可以得到的最大和, 定义状态 f\[i][0] 表示前 i 个元素, 偶数个参与异或运算可以得到的最大和; 状态 f\[i][1] 表示前 i 个元素, 奇数个参与异或运算可以得到的最大和
+
+最终返回值为 f\[n][0]
+
+```java
+class Solution {
+    private static final int INF = 0xf3f3f3f3;
+    public long maximumValueSum(int[] nums, int k, int[][] edges) {
+        int n = nums.length;
+        long[][] f = new long[n + 1][2];
+        f[0][1] = INF;
+        for (int i = 1; i <= n; i ++) {
+            f[i][0] = Math.max(f[i - 1][0] + nums[i - 1], f[i - 1][1] + (nums[i - 1] ^ k));
+            f[i][1] = Math.max(f[i - 1][1] + nums[i - 1], f[i - 1][0] + (nums[i - 1] ^ k));
+        } 
+        return f[n][0];
+    }
+}
+```
+
 # [第 387 场周赛](https://leetcode.cn/contest/weekly-contest-387)
 
 ## [100243. 将元素分配到两个数组中 I](https://leetcode.cn/contest/weekly-contest-387/problems/distribute-elements-into-two-arrays-i/)
