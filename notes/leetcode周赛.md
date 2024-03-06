@@ -7868,6 +7868,126 @@ class Solution {
 
 # [第 125 场双周赛](https://leetcode.cn/contest/biweekly-contest-125/)
 
+## [3065. 超过阈值的最少操作数 I (Minimum Operations to Exceed Threshold Value I)](https://leetcode.cn/classic/problems/minimum-operations-to-exceed-threshold-value-i/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-operations-to-exceed-threshold-value-i/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/06/10:34:28:3065.png" />
+	</a>
+</div>
+直接遍历的同时统计一下个数就行了
+
+```java
+class Solution {
+    public int minOperations(int[] nums, int k) {
+        int rst = 0;
+        for (int n : nums) {
+            if (n < k) rst++;
+        }
+        return rst;
+    }
+}
+```
+
+
+## [3066. 超过阈值的最少操作数 II (Minimum Operations to Exceed Threshold Value II)](https://leetcode.cn/classic/problems/minimum-operations-to-exceed-threshold-value-ii/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-operations-to-exceed-threshold-value-ii/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/06/10:31:33:3066.png" />
+	</a>
+</div>
+
+借助堆, 可以在 $O(\log n)$ 的时间内找到数组中最小的元素, 并在 $O(\log n)$ 的时间内将修改后的元素添加到堆中; 因此直接模拟就行了, 整体时间复杂度为: $O(n\log n)$
+
+```java
+class Solution {
+    public int minOperations(int[] nums, int k) {
+        Queue<Long> q = new PriorityQueue<>();
+        for (int n : nums) q.offer((long)n);
+        int rst = 0;
+        while (q.peek() < k) {
+            long a = q.poll();
+            long b = q.poll();
+            q.offer((a << 1) + b);
+            rst++;
+        }
+        return rst;
+    }
+}
+```
+
+## [3067. 在带权树网络中统计可连接服务器对数目 (Count Pairs of Connectable Servers in a Weighted Tree Network)](https://leetcode.cn/classic/problems/count-pairs-of-connectable-servers-in-a-weighted-tree-network/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/count-pairs-of-connectable-servers-in-a-weighted-tree-network/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/06/10:05:52:3067.png" />
+	</a>
+</div>
+
+本题具有迷惑性的一点在于, 当 a < b 时, 并且满足 signalSpeed 条件时, 才能称 a 和 b 时通过 c 连接的; 实际在判别的时候, 其实不需要考虑 a 和 b 之间的大小关系, 对于任意的 c 而言, 只要 a 和 b 满足分别在两个子树上的条件, 即可认为 a 和 c 时通过 c 连接的
+
+本题的输入范围很小, 只有 $10^3$ 级别, 因此不需要使用换根优化, 直接枚举根节点然后搜索即可, 整体时间复杂度为: $O(n^2)$ 在本题的输入下, 肯定是可以满足条件的
+
+每轮枚举中, 统计当前节点的各个子树中满足 singalSpeed 条件的节点的数量, 并通过乘法原理进行统计, 对于节点 n 下的三棵子树 a, b, c; 其中满足 signalSpeed 条件的节点个数分别为 x, y, z; 则通过 n 可以连接的服务器的数量为: x * y + (x + y) * z -> $\sum\text{pre}\times\text{cur}$
+
+```java
+class Solution {
+    private int[] h;
+    private int[] e;
+    private int[] ne;
+    private int[] w;
+    private int idx;
+    private int ss;
+    
+    public int[] countPairsOfConnectableServers(int[][] edges, int signalSpeed) {
+        int m = edges.length;
+        int n = m + 1;
+        this.h = new int[n];
+        Arrays.fill(h, -1);
+        this.e = new int[m << 1];
+        this.ne = new int[m << 1];
+        this.w = new int[m << 1];
+        this.idx = 0;
+        for (int[] es : edges) {
+            add(es[0], es[1], es[2]);
+            add(es[1], es[0], es[2]);
+        }
+        this.ss = signalSpeed;
+        int[] rst = new int[n];
+        for (int i = 0; i < n; i++) {
+            int pre = 0;
+            for (int j = h[i]; j != -1; j = ne[j]) {
+                int k = e[j];
+                int tmp = dfs(k, i, w[j]);
+                rst[i] += pre * tmp;
+                pre += tmp;
+            }
+        }
+        return rst;
+    }
+    
+    // 统计子树下满足 signalSpeed 条件的节点的个数
+    private int dfs(int n, int fa, int dis) {
+        int rst = 0;
+        if (dis % ss == 0) rst ++;
+        
+        for (int i = h[n]; i != -1; i = ne[i]) {
+            int j = e[i];
+            if (j == fa) continue;
+            rst += dfs(j, n, dis + w[i]);
+        }
+        return rst;
+    }
+    
+    private void add(int a, int b, int c) {
+        e[idx] = b;
+        ne[idx] = h[a];
+        w[idx] = c;
+        h[a] = idx ++;
+    } 
+}
+```
 
 
 ## [3068. 最大节点价值之和 (Find the Maximum Sum of Node Values)](https://leetcode.cn/classic/problems/find-the-maximum-sum-of-node-values/description/)
@@ -7877,6 +7997,7 @@ class Solution {
 		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/04/11:23:15:3068.png" />
 	</a>
 </div>
+
 有的时候题目并不直接, 需要发现一些性质, 本题的关键点在于异或, 一个数字异或偶数次后, 会变回本身
 
 本题的连通图是一棵树, 那么对于树中任意两个节点都存在一条路径, 本题的第一个性质是, 对于任意两个节点, 通过按照路径进行异或, 最终的结果一定是只有路径两端的节点进行了异或, 而路径上其他的节点不变, 即**任意两个节点之间都存在一条等效的可以进行异或的边**
