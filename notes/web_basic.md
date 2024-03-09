@@ -56,5 +56,13 @@ Content-Range: bytes [start]-[end]/[total]
 
 当使用 Content-Range 时, HTTP status code 经常被设置为 206 -> Partial Content, 表示仅仅返回了部分 resource
 
+# CSRF
+
+不太好说明类型, spring 官网是用一个例子说明的: [Cross Site Request Forgery (CSRF) :: Spring Security](https://docs.spring.io/spring-security/reference/features/exploits/csrf.html)
+
+CSRF 的问题出现在 cookie 中, 攻击者并不需要知道 cookie 的内容, 当 client 端没有通过 logout 主动释放关闭一个 session, cookie 还保存在 client 端, 当 client 访问到恶意网站后, js 可以主动发起一个到原网站的请求, 此时 browser 会携带由 cookie 信息进行身份验证
+
+在使用 jwt 标识身份信息的场景中, 其实不太需要关心这个问题 -> 只要 jwt 不保存在 cookie 中 (in-memory 或 local storage 中), 此时在 spring security 的配置中, 直接把这个配置 disable 掉
+
 
 
