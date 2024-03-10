@@ -64,5 +64,24 @@ CSRF 的问题出现在 cookie 中, 攻击者并不需要知道 cookie 的内容
 
 在使用 jwt 标识身份信息的场景中, 其实不太需要关心这个问题 -> 只要 jwt 不保存在 cookie 中 (in-memory 或 local storage 中), 此时在 spring security 的配置中, 直接把这个配置 disable 掉
 
+# RSA key pair
+
+在某些场景中需要用到非对称加密, 比如在最新的 jjwt 中, 要求 jwt 需要使用 private-key 签名, 而使用 public-key 进行校验
+
+一般而言可以借助 ssh-keygen 生成这个 key, 而在一般的应用中, 很多时候最好直接生成 .pem 格式的 key 文件, 这个时候需要用到 openssl 这个工具
+
+```shell
+# 在当前目录下生成一个私钥
+$ openssl genrsa -out ./private-key.pem 2048 
+```
+
+对应的公钥通过私钥生成
+
+```shell
+$ openssl rsa -in private-key.pem -pubout -out public-key.pem
+```
+
+>   如果为了私钥的安全甚至可以生成一个加密了的私钥 ... 混合加密 ?
+
 
 

@@ -8178,6 +8178,7 @@ class Solution {
 		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/03/15:15:17:100246.png" />
 	</a>
 </div>
+
 暴力线段树, $O(\log n)$ 的时间内完成修改, $O(\log n)$ 完成查询
 
 ```java
@@ -8367,6 +8368,237 @@ class Solution {
 ```
 
 在使用树状数组的时候, 要注意下标需要从 1 开始, 因此在离散函数 map 中返回值最后 + 1
+
+# [第 388 场周赛](https://leetcode.cn/contest/weekly-contest-388/)
+
+## [100233重新分装苹果 (Apple Redistribution into Boxes)](https://leetcode.cn/classic/problems/apple-redistribution-into-boxes/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/apple-redistribution-into-boxes/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/10/15:40:37:100233.png" />
+	</a>
+</div>
+为了让使用的箱子数最少, 让箱子容量大的先放, 也就是排序 ...
+
+```java
+class Solution {
+    public int minimumBoxes(int[] a, int[] c) {
+        Arrays.sort(c);
+        int sum = 0;
+        for (int n : a) sum += n;
+        int rst = 0;
+        for (int j = c.length - 1; j >= 0; j--) {
+            sum -= c[j];
+            rst++;
+            if (sum <= 0) break;
+        }
+        return rst;
+    }
+}
+```
+
+
+## [100247. 幸福值最大化的选择方案 (Maximize Happiness of Selected Children)](https://leetcode.cn/classic/problems/maximize-happiness-of-selected-children/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/maximize-happiness-of-selected-children/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/10/15:36:00:100247.png" />
+	</a>
+</div>
+
+贪心的选取孩子, 先选幸福值大的; 如果先选幸福值小的, 那么幸福值大的会由于轮次的增加而不断减少幸福值, 但如果先选幸福值大的, 那么幸福值小的最小也只会减少到 0, 整体上来看, 减少量不会比先选幸福值小的更大
+
+省流: 排个序就行了
+
+```java
+class Solution {
+    public long maximumHappinessSum(int[] hs, int k) {
+        Arrays.sort(hs);
+        int n = hs.length;
+        long rst = 0;
+        for (int i = 0, j = n - 1; i < k; i++, j--) {
+            rst += Math.max(hs[j] - i, 0);
+        }
+        return rst;
+    }
+}
+```
+
+
+## [100251. 数组中的最短非公共子字符串 (Shortest Uncommon Substring in an Array)](https://leetcode.cn/classic/problems/shortest-uncommon-substring-in-an-array/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/shortest-uncommon-substring-in-an-array/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/10/15:27:00:100251.png" />
+	</a>
+</div>
+
+数组 arr 大小一共 100, 每个字符串长度才 20, 枚举每个字符串的各个子字符串时间复杂度为 $O(n\times m^2)$ 在本题中, 为 $10^4$ 级别, 那么就暴力枚举吧
+
+因为需要检查当前枚举的子字符串是否已经在其他的字符串中出现, 这里采用字典树预处理
+
+```java
+class Solution {
+    public long maximumHappinessSum(int[] hs, int k) {
+        Arrays.sort(hs);
+        int n = hs.length;
+        long rst = 0;
+        for (int i = 0, j = n - 1; i < k; i++, j--) {
+            rst += Math.max(hs[j] - i, 0);
+        }
+        return rst;
+    }
+    public String[] shortestSubstrings(String[] arr) {
+        int n = arr.length;
+        Trie root = new Trie();
+        for (int i = 0; i < n; i++) add(arr[i].toCharArray(), i, root);
+        // 使用 mask 数字记录最短的子字符串出现的位置
+        int[] masks = new int[n];
+        Arrays.fill(masks, -1);
+        for (int i = 0; i < n; i++) {
+            char[] cs = arr[i].toCharArray();
+            int m = cs.length;
+            for (int j = 0; j < m; j++) {
+                for (int k = j; k < m; k++) {
+                   if (query(cs, j, k, root)) {
+                       // 经典组合一下左右边界
+                       if (masks[i] == -1) masks[i] = j * 30 + k;
+                       else masks[i] = compare(cs, masks[i] / 30, masks[i] % 30, j, k);
+                   }
+                }
+            }
+        }
+        String[] rst = new String[n];
+        for (int i = 0; i < n; i++) {
+            if (masks[i] == -1) rst[i] = "";
+            else rst[i] = arr[i].substring(masks[i] / 30, masks[i] % 30 + 1);
+        }
+        return rst;
+    }
+	
+    // 当一个字符串有多个子字符串未出现, 需要比较判别哪个更短, 字典序更小
+    private int compare(char[] cs, int l1, int r1, int l2, int r2) {
+        if (r1 - l1 < r2 - l2) return l1 * 30 + r1;
+        else if (r1 - l1 > r2 - l2) return l2 * 30 + r2;
+        int i = l1, j = l2;
+        while (i <= r1 && j <= r2) {
+            if (cs[i] < cs[j]) return l1 * 30 + r1;
+            else if (cs[i] > cs[j]) return l2 * 30 + r2;
+            i++;
+            j++;
+        }
+        if (i > r1) return l1 * 30 + r1;
+        return l2 * 30 + r2;
+    }
+
+    private boolean query(char[] cs, int l, int r, Trie root) {
+        Trie node = root;
+        for (int i = l; i <= r; i++) {
+            int ne = cs[i] - 'a';
+            node = node.children[ne];
+        }
+        return node.mask != -1;
+    }
+
+    private void add(char[] cs, int idx, Trie root) {
+        int n = cs.length;
+        for (int i = 0; i < n; i++) {
+            Trie node = root;
+            for (int j = i; j < n; j++) {
+                int ne = cs[j] - 'a';
+                if (node.children[ne] == null) node.children[ne] = new Trie();
+                node = node.children[ne];
+                // 因为下标 0 被设置为默认值, 因此记录下标的时候带上偏移量
+                if (node.mask == 0) node.mask = idx + 1;
+                else if (node.mask != idx + 1) node.mask = -1;
+            }
+        }
+    }
+}
+
+class Trie {
+    Trie[] children;
+    // mask 记录当前子字符串所属的原字符串, 如果多个字符串都有相同的子字符串, masks 被置为 -1
+    int mask;
+
+    public Trie() {
+        this.children = new Trie[26];
+        this.mask = 0;
+    }
+}
+```
+
+
+
+ 
+
+
+
+
+## [100216. K 个不相交子数组的最大能量值 (Maximum Strength of K Disjoint Subarrays)](https://leetcode.cn/classic/problems/maximum-strength-of-k-disjoint-subarrays/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/maximum-strength-of-k-disjoint-subarrays/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/10/14:52:54:100216.png" />
+	</a>
+</div>
+
+因为是子数组, 且不重叠, 很容易想到使用 dp 定义状态, 定义状态 f\[i][j] 表示前 i 个数字构成 j 个不相交的子数组的最大能量值, 状态的转移取决于最后一个元素 i
+
+*   如果不选, 有 f\[i][j] = f\[i - 1][j]
+
+*   如果选, 将意味着前 i 个数字构成的 j 个子数组中, 第 i 个数组属于子数组, 则 i 一定是第 j 个子数组的右边界, 此时需要寻找第 j 个子数组的左边界, 有:
+
+    *   最后一个子数组只包含 nums[i], 则 $\text{f[i][j]} = \text{f[i - 1][j - 1]} + \text{(k - j + 1)} \times (-1)^{\text{j + 1}} \times \text{sum}(\text{i})$
+    *   如果最后一个子数组包含 nums[i] 和 nums[i - 1], 则 $\text{f[i][j]} = \text{f[i - 2][j - 1]} + \text{(k - j + 1)} \times (-1)^{\text{j + 1}} \times \text{sum}(\text{i, i - 1})$
+    *   ...
+
+    枚举左边界的时间复杂度为 $O(n)$, 显然应该从上面的 n 种状态种选择一个最大的转移
+
+因此整体的时间复杂度为 $O(n\times k\times n)$, 在本题中时间复杂度达到了 $10^{10}$ 级别, 肯定是过不了的
+
+一般这个时候就是要优化枚举左边界的过程, 随便写写发现, f\[i - 1][j] 的状态也可以根据最后一个数字 nums[i - 1] 是否可选分为两种:
+
+*   不选, 此时 f\[i - 1][j] = f\[i - 2][j]
+*   选, 此时 nums[i - 1] 一定属于第 j 个子数组的右边界, 具体原因和上面一样
+    *   如果最后一个子数组只包含 nums[i - 1], 则 $\text{f[i - 1][j]} = \text{f[i - 2][j - 1]} + \text{(k - j + 1)} \times (-1)^{\text{j + 1}} \times \text{sum}(\text{i - 1})$
+    *   如果最后一个子数组包含 nums[i - 1] 和 nums[i - 2], 则 $\text{f[i - 1][j]} = \text{f[i - 3][j - 1]} + \text{(k - j + 1)} \times (-1)^{\text{j + 1}} \times \text{sum}(\text{i - 1, i - 2})$
+    *   ...
+
+对比一下 f\[i][j] 和 f\[i - 1][j] 在选择了最后一个数字后, n 种可选的转移方式, 现在定义 g\[i][j] 表示在选择了第 i 个数字的情况下, 子数组数量为 j 的情况下, 最大的能量
+
+显然有 f\[i][j] = max(f\[i - 1][j], g\[i][j]), 且 $\text{g[i][j]} = \max(\text{f[i - 1][j - 1]}, \text{g[i - 1][j]}) + \text{nums[i - 1]} \times (-1)^\text{j + 1} \times \text{(k - j + 1)}$
+
+这样借助额外的 g 数组, 可以在 $O(1)$​ 的时间内完成转移, g 数组的关键在于本行的最大值可以通过上一行的最大值运算得到, 本行的最大值仅仅在在一行的最大值的基础上多比较了一个位置后 (f\[i - 1][j - 1]), 再增加了一个偏移量 (nums[i - 1] 和它的系数)
+
+本题的初始化很关键, 显然 f\[i][0] = 0, 表示如果选择 0 个子数组, 则不管怎么选能量值都是 0; 而 f\[i][i + 1] 为非法值 (本题中设置为负无穷), 表示从 i 个数字, 无论如何都不可能分割出 i + 1 个子数组; g 的初始化和 f 相同 (毕竟二者从含以上只有最后一个子数组是否一定包含最后一个数字的区别)
+
+具体在编码的时候, i 和 j 都从 1 开始, 返回值为 f\[n][k]
+
+```java
+class Solution {
+    private static final long INF = 0xf3f3f3f3f3f3f3f3L;
+    public long maximumStrength(int[] nums, int k) {
+        int n = nums.length;
+        long[][] f = new long[n + 1][k + 1];
+        long[][] g = new long[n + 1][k + 1];
+        for (int i = 0; i < k; i++) {
+            f[i][i + 1] = INF;
+            g[i][i + 1] = INF;
+        }
+        
+        for (int i = 1; i <= n; i++) {
+            for (int j = 1; j <= Math.min(i, k); j++) {
+                long w = (k - j + 1) * (long)nums[i - 1];
+                if ((j & 1) == 0) w *= -1;
+                g[i][j] = Math.max(f[i - 1][j - 1], g[i - 1][j]) + w;
+                f[i][j] = Math.max(f[i - 1][j], g[i][j]);
+            }
+        }
+        return f[n][k];
+    }
+}
+```
 
 
 
