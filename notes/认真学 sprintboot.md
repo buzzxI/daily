@@ -957,7 +957,9 @@ public enum PostState implements StringValueEnum, IntValueEnum{
 }
 ```
 
-# spring security & jwt
+# spring security
+
+## jwt token
 
 整体分为两部分: authentication (认证) 和 authorization (授权)
 
@@ -993,23 +995,642 @@ print(f"Generated JWT secret key: {jwt_secret_key}")
 
 上述流程其实不重要, 因为在最新的 jjwt 验证中, 已经弃用了这种方式, 而强制要求用户必须使用 private key 和 public key pair; 任何的 client 都可以使用 public key 对签名进行验证, 而 server 需要使用 private key 进行签名; 
 
-这种 key pair 也是比较基本的非对称加密, 一般的使用 rsa 的方式生成即可 (ssh-keygen 也行)
+这种 key pair 也是比较基本的非对称加密, 这里可以使用 openssl 即可生成对应的密钥对 (ssh-keygen 也行)
 
-```python
-import rsa
+## security
 
-# Generate an RSA key pair
-(public_key, private_key) = rsa.newkeys(2048)
+其实说白了还是 filter 那一套, spring security 采用一种十分复杂的方式表示串联各个 filter, 进行认证并鉴权, 整体结构为:
 
-# Save the keys to files
-with open("public_key.pem", "wb") as public_key_file:
-    public_key_file.write(public_key.save_pkcs1())
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/11/20:49:26:spring_security_architecture.jpg)
 
-with open("private_key.pem", "wb") as private_key_file:
-    private_key_file.write(private_key.save_pkcs1())
+1.   对于任意的 http request, spring security 会首先通过 filter 过滤, 试图通过 filter 对 request 进行 authentication/authorization, 上图所示的 Authentication Filter 一般是一个 filter chain
 
-print("RSA key pair generated and saved as public_key.pem and private_key.pem")
+     比如 UsernamePasswordAuthenticationFilter, 就是从 request 中根据 username 和 password, 对请求进行授权
+
+     在使用 jwt 认证的场景中, 经典行为就是先通过 username 和 password 进行认证, 并对认证的用户返回一个 jwt token 该 token 包含了用户的身份信息, 后续的请求需要携带该 token, 这样 server 才能对其进行认证和鉴权
+
+2.   在 filter chain 中, 合适的 filter 会对 request 进行处理, 并在当前请求的上下文中保存一个 AuthenticationToken
+
+3.   这里的 AuthenticationToken, 仅仅是对 request 中携带的身份信息的一个封装, 尚未进行实际的认证/鉴权
+
+4.   spring security 为了功能解耦, 支持多种认证/鉴权方式, 默认的认证的行为被一个 Manager 进行管理, 对外界而言, 暴露一个 authenticate 方法, 在上一步得到的 AuthenticationToken, 会调用该接口进行认证/鉴权
+
+     AuthenticationManager 是一个接口, 实际的 Manager 使用默认的 ProviderManager
+
+5.   为了支持多种认证方式, 每种认证方式都通过 AuthenticationProvider 进行抽象, 比较常用的是 DaoAuthenticationProvider, 从名字也能看出来是和 dao 相关的认证方式, 表示需要对于 AuthenticationToken 和持久化的数据进行比较进行认证/鉴权
+
+6.   UserDetailsService 本身也是一个接口, 定义了方法 loadUserByUsername, 表示根据用户名查找用户, AuthenticationProvider 需要依靠 UserDetailsService 根据用户名查找本地保存的 user
+
+7.   UserDetailsService 会返回一个符合 spring security 鉴权格式的 UserDetails 对象, 后续在 AuthenticationProvider 中比较 request 中的身份信息和返回的 UserDetails 中的身份信息; 通常比较的是密码
+
+8.   一系列 AuthenticationProvider 会将认证/鉴权的结果返回给 AuthenticationManager, 在 manager 处对认证的结果进行判断
+
+9.   AuthenticationManager 返回的是一个被认证/鉴权后的 AuthenticationToken
+
+10.   该 AuthenticationToken 会被保存在上下文中, 和请求一起进入 controller, 此后 spring security 完成了认证/鉴权
+
+借助 spring security, 后续在 controller, service 中都可以访问到当前请求下的身份信息; 本质上 spring security 就是希望通过 filter 将 request 中的身份信息具化, 并保存在调用链的上下文中
+
+## talk is cheap
+
+>   本来想着一个鉴权能有多复杂, 但实际写的时候才发现 code is sooooooo expensive ...
+
+整个例子使用了: spring-security (废话), jjwt 作为 jwt 操作的工具类, redis 作为 nosql 加速多次针对同一个用户的查找, mybatis-plus 作为持久化层的框架, mysql 作为数据库, 保存了一个用户表 ...
+
+>   其实是想做 user <-> role <-> privilege 的多对多的映射关系的, 太麻烦了, 一个示例不需要这么麻烦
+
+整个示例的框架如下
+
+```shell
+├─config		# 一些配置类, 比如 security, redis, jwt, mybatis
+├─constant		# 用到的一些常量信息
+├─controller	# 应该不用介绍了
+├─dto			# dto 保存的是 controller 和前端交互的数据, request/response
+├─entities		# 主要是 user 类
+├─exception		# 自定义的异常类
+├─filter		# jwt 示例的关键, 自定义了一个服从 spring security 规范的 filter
+├─handler		# 处理各种异常的 handler
+├─mapper		# UserMapper 
+├─service		# 应该也不用介绍了
+│  └─impl
+└─util			# 工具类就是把 redis template 再封装了一下
 ```
 
->   这里需要 python 环境 rsa, 不管是 pip 还是 conda 反正装上才能用
+### redis
+
+>   先把边缘的配置说一下
+
+其实就是封装了一下 RedisTemplate, 本例中 redis 不是关键, 所以还是按照常规, 配置了一个 String -> Object 类型的 RedisTemplate, 比较通用, 也比较常用吧
+
+```java
+package icu.buzz.security.config;
+
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.PropertyAccessor;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.serializer.Jackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.StringRedisSerializer;
+
+@Configuration
+public class RedisConfig {
+
+    @Bean("String2ObjectTemplate")
+    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory factory) {
+        RedisTemplate<String, Object> template = new RedisTemplate<>();
+
+        template.setConnectionFactory(factory);
+
+        // string as key
+        StringRedisSerializer keySerializer = new StringRedisSerializer();
+        template.setKeySerializer(keySerializer);
+        template.setHashKeySerializer(keySerializer);
+
+        // object as value
+        ObjectMapper objectMapper = new ObjectMapper();
+        // serialize all: getter/setter/fields, regardless of access modifier
+        objectMapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
+        // serialize non-final class only
+        objectMapper.activateDefaultTyping(LaissezFaireSubTypeValidator.instance, ObjectMapper.DefaultTyping.NON_FINAL);
+        Jackson2JsonRedisSerializer<Object> valueSerializer = new Jackson2JsonRedisSerializer<>(objectMapper, Object.class);
+
+        template.setValueSerializer(valueSerializer);
+        template.setHashValueSerializer(valueSerializer);
+        // make sure all configuration is set
+        template.afterPropertiesSet();
+        return template;
+    }
+}
+```
+
+config 类的作用是向 spring 中注入一个 RedisTemplate 作为 bean, 其实有这个 bean 就可以直接操作 key 和 value 了, 但还是使用了一个 RedisUtils 进行了封装
+
+```java
+package icu.buzz.security.util;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.stereotype.Component;
+
+import java.util.concurrent.TimeUnit;
+
+@Component
+public class RedisUtil {
+    // evaluate the value of the default-expire property
+    @Value("${spring.data.redis.default-expire}")
+    private long defaultExpire;
+
+    private final RedisTemplate<String, Object> template;
+
+    @Autowired
+    public RedisUtil(RedisTemplate<String, Object> template) {
+        this.template = template;
+    }
+
+    public Object get(String key) {
+        return template.opsForValue().get(key);
+    }
+
+    public void set(String key, Object value) {
+        this.set(key, value, defaultExpire);
+    }
+
+    public void set(String key, Object value, long timeout) {
+        template.opsForValue().set(key, value, timeout, TimeUnit.SECONDS);
+    }
+
+    public void delete(String key) {
+        template.delete(key);
+    }
+}
+```
+
+就是为各个 key 添加了一个过期时间, 该时间可以通过配置文件进行配置, 这里默认的过期时间设置的比较长, 设置了 24 小时
+
+```yaml
+spring:
+  data:
+    redis:
+      port: 6380
+      host: localhost
+      default-expire: 86400 # 60 * 60 * 24
+```
+
+>   有 docker 之后, 这些服务就随便起了, 我这里是把 redis 放在了 6380 端口上
+
+### jwt
+
+有关 jwt 的相关配置, 在最新的 jjwt 库中, 要求必须使用 private key 进行签名, 而使用 public key 进行校验, 因此这里还需要配置 key 的存放位置
+
+```java
+@ConfigurationProperties(prefix = "jwt")
+public record JwtConfig(long expireTime, RsaKeys rsaConfig) {
+    public record RsaKeys(RSAPublicKey publicKey, RSAPrivateKey privateKey) {
+    }
+}
+```
+
+server 颁发的 jwt 包含了过期时间信息, 同时这里借助 jdk 16 提供的 record 特性, 保存各个参数
+
+```yaml
+jwt:
+  # god-damn it, spring does not support EL in yml file
+  expire-time: 7200 # 60 * 60 * 2
+  rsa-config:
+    private-key: classpath:cert/private_key.pem
+    public-key: classpath:cert/public_key.pem
+```
+
+>   spring 在 yaml 文件中并不支持 EL 表达式, 这意味着配置时间参数的时候需要手动计算出来 ...
+
+这里默认将 key 保存在 resource 下的 cert 目录中了, 本例使用的 private-key 和 public-key 都是使用 openssl 生成的, 采用的是 rsa 算法
+
+jwt 有关的操作本质上就是两种, 要么是颁发签名, 要么是验证签名
+
+```java
+package icu.buzz.security.service;
+
+import icu.buzz.security.config.JwtConfig;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.stereotype.Service;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Date;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+@Service
+public class JwtService {
+
+    private JwtConfig jwtConfig;
+
+    @Autowired
+    public void setJwtConfig(JwtConfig jwtConfig) {
+        this.jwtConfig = jwtConfig;
+    }
+	
+    // 生成一个 jwt token
+    public String generateToken(Authentication authentication) {
+        Instant now = Instant.now();
+
+        String scope = authentication
+                .getAuthorities()
+                .stream()
+                .map(GrantedAuthority::getAuthority)
+                .collect(Collectors.joining(" "));
+
+        return Jwts.builder()
+                .issuer("self")
+                .subject(authentication.getName())
+                .claims(Map.of("scope", scope))
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(now.plus(jwtConfig.expireTime(), ChronoUnit.SECONDS)))
+                .signWith(jwtConfig.rsaConfig().privateKey())
+                .compact();
+    }
+	
+    // 检查 token 是否过期, 其实就是比较一下当前时间和 token 中的时间信息
+    public boolean tokenExpire(String token) {
+        return extractExpiration(token).before(new Date());
+    }
+
+    // 提取 jwt 中的用户信息 (也就是主体, subject)
+    public String extractUsername(String token) {
+        return extractClaim(token, Claims::getSubject);
+    }
+	
+    // 提取 jwt 中的颁发日期信息
+    public Date extractExpiration(String token) {
+        return extractClaim(token, Claims::getExpiration);
+    }
+    
+    // 提取 jwt 中的某个 claim, 具体的类型通过 Function 决定
+    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        Claims claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
+    }
+	
+    // 提取 jwt 中的各个 claim
+    private Claims extractAllClaims(String token) {
+        return Jwts.parser()
+                .verifyWith(jwtConfig.rsaConfig().publicKey())
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+    }
+}
+```
+
+注意到生成 jwt token 的时候参数是一个 Authentication, 其实是 AuthenticationManager 的返回值
+
+### login
+
+>   前面的那些也就是凉菜, 先上点热菜
+
+每个 login 请求都包含两部分, username 和 password, 这里也使用了对象进行封装
+
+```java
+package icu.buzz.security.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+
+@Data
+@AllArgsConstructor
+public class LoginRequest {
+    private String username;
+    private String password;
+}
+```
+
+有关权限相关的操作都被抽象到了 AuthController 中
+
+```java
+package icu.buzz.security.controller;
+
+import icu.buzz.security.constant.SecurityConstant;
+import icu.buzz.security.dto.LoginRequest;
+import icu.buzz.security.service.AuthService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/auth")
+public class AuthController {
+
+    private final AuthService authService;
+
+    public AuthController(AuthService authService) {
+        this.authService = authService;
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<Void> login(@RequestBody LoginRequest request) {
+        String jwt = authService.authenticate(request);
+        HttpHeaders httpHeaders = new HttpHeaders();
+        httpHeaders.set(SecurityConstant.TOKEN_HEADER, SecurityConstant.TOKEN_PREFIX + jwt);
+        return new ResponseEntity<>(httpHeaders, HttpStatus.OK);
+    }
+}
+```
+
+基本上所有的逻辑都抽象放在了 service 中了, controller 就只是把 token 放在 response header 中了
+
+```java
+public class SecurityConstant {
+    public static final String TOKEN_HEADER = "Authorization";
+    public static final String TOKEN_PREFIX = "Bearer ";
+}
+```
+
+jwt 保存在 http response header 中的 Authentication 字段中, 并且保留了一个前缀 Bearer
+
+```java
+@Service
+public class AuthServiceImpl implements AuthService {
+    
+    @Override
+    public String authenticate(LoginRequest request) {
+        try {
+            Authentication authenticate = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(
+                            request.getUsername(),
+                            request.getPassword()));
+            // user may not be available: disabled user (banned), locked (danger), expired (temp user)
+            if (!authenticate.isAuthenticated()) {
+                throw new UserNotAvailableException(Map.of(ExceptionConstant.USER_NOT_AVAILABLE, request.getUsername()));
+            }
+            return jwtService.generateToken(authenticate);
+        } catch (BadCredentialsException e) {
+            throw new PasswordMismatchException(Map.of(ExceptionConstant.BAD_CREDENTIALS, request.getUsername()));
+        }
+    }
+}
+```
+
+方法 authenticate 首先根据 request 中包含了 username 和 password 信息生成一个未认证/授权的 AuthenticationToken, 并将该 token 交给 AuthenticationManager 进行授权/认证, 最终返回一个被认证的 AuthenticationToken, 该 token 会交给 jwt service 生成表示了用户身份信息的 jwt
+
+注意到校验 AuthenticationToken 的时候, 是可能不通过的, 在 spring security 中通过 BadCredentialException 体现, 为了对异常进行全面的掌控, 这里将其转化为一个自定义的 PasswordMismatchException, 这个异常可以用来指示用户名和密码不匹配, 这个异常会被自定义的全局异常处理类捕获
+
+在本例中 AuthenticationManager 是作为一个 bean 被注入当前 service 中的, 具体的有关 AuthenticationManager 的配置放在了配置类 AuthConfig 中
+
+```java
+package icu.buzz.security.config;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.ProviderManager;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+import java.util.List;
+
+@Configuration
+public class AuthConfig {
+
+    private UserDetailsService userDetailsService;
+
+    @Autowired
+    public void setUserDetailsService(UserDetailsService userDetailsService) {
+        this.userDetailsService = userDetailsService;
+    }
+
+    /**
+	 * just as the name said, encode the password (with salt dynamically)
+	 */
+	@Bean
+	public PasswordEncoder passwordEncoder() {
+		return new BCryptPasswordEncoder();
+	}
+
+    /**
+	 * query user info by UserDetailService
+	 * retrieve UserDetails by username -> UsernameNotFoundException
+	 * check user status -> some other exception
+	 * compare password -> BadCredentialsException
+	 */
+	@Bean
+	public DaoAuthenticationProvider daoAuthenticationProvider(PasswordEncoder passwordEncoder) {
+		DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+		provider.setPasswordEncoder(passwordEncoder);
+		provider.setUserDetailsService(this.userDetailsService);
+		return provider;
+	}
+
+	/**
+	 * control the way to authenticate the user
+	 */
+	@Bean
+	public AuthenticationManager authenticationManager(DaoAuthenticationProvider daoAuthenticationProvider) {
+		return new ProviderManager(List.of(daoAuthenticationProvider));
+	}
+}
+```
+
+AuthenticationManager 需要若干个 AuthenticationProvider, 这里通过一个 List 存储 (其实也就是一个 DaoAuthenticationProvider); 每个 AuthenticationProvider 都需要配置好 UserDetialsService 的实现类, 用来获取实际的用户身份信息; spring security 也支持对密码进行加密, 将密码以明文的形式保存的确不妥, 因此也配置了一个 password encoder
+
+### UserDetailsService
+
+这部分其实主要是从持久化层根据 username 获取用户的操作
+
+```java
+@Service
+public class UserDetailsServiceImpl implements UserDetailsService {
+    private final RedisUtil redisUtil;
+    private final UserMapper userMapper;
+
+    @Autowired
+    public UserDetailsServiceImpl(RedisUtil redisUtil, UserMapper userMapper) {
+        this.redisUtil = redisUtil;
+        this.userMapper = userMapper;
+    }
+
+    @Override
+    public UserDetails loadUserByUsername(String username) {
+        User user = (User) redisUtil.get(username);
+        if (user == null) {
+            // query by mybatis-plus
+            List<User> users = userMapper.selectList(new QueryWrapper<User>().lambda().eq(User::getUsername, username));
+            if (users.isEmpty()) {
+                throw new UsernameNotFoundException(Map.of(ExceptionConstant.USERNAME_NOT_FOUND, username));
+            }
+            if (users.size() > 1) {
+                // multiple users found, that should be server internal error
+                throw new MultiUserFoundException(Map.of(ExceptionConstant.MULTIPLE_USER_FOUND, username));
+            }
+            user = users.get(0);
+            redisUtil.set(user.getUsername(), user);
+        }
+        return new JwtUser(user);
+    }
+}
+```
+
+首先会从 redis 中根据用户名查找一个 User, 如果找不到的话才会借助 mybatis 到数据库中查询, 注意到这个方法最终需要返回的是一个 UserDetails 对象, 因此实际保存的类型 User 需要封装一下, 在本实例中, 使用 JwtUser 继承了 UserDetails 保存了用户信息
+
+```java
+package icu.buzz.security.entities;
+
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+// enable chain style (lombok)
+@Accessors(chain = true)
+// associate entity with table user
+@TableName("`users`")
+public class User  {
+    // primary key, auto generate by mybatis-plus (uuid)
+    @TableId(value = "uid", type = IdType.ASSIGN_UUID)
+    private String uid;
+    private String username;
+    private String password;
+    private Boolean enabled;
+    private Role role;
+}
+```
+
+在实际的数据库中, 保存的信息和 UserDetails 中的信息并不完全对应, 这里采用 uuid 作为 user 表的主键, 同时保存了 username, password(加密后); 同时针对用户的有效性, 使用字段 enabled 表示; 为了表示用户的身份信息, 使用枚举类 Role 封装
+
+```java
+package icu.buzz.security.entities;
+
+import com.baomidou.mybatisplus.annotation.EnumValue;
+import lombok.Getter;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+@Getter
+public enum Role {
+    ADMIN(1, Set.of(Privilege.READ, Privilege.WRITE, Privilege.UPDATE, Privilege.DELETE), "admin"),
+    USER(2, Set.of(Privilege.READ, Privilege.WRITE), "user"),
+    ;
+
+    @EnumValue
+    private final int id;
+    private final Set<Privilege> privileges;
+    private final String desc;
+
+    Role(int id, Set<Privilege> privileges, String desc) {
+        this.id = id;
+        this.privileges = privileges;
+        this.desc = desc;
+    }
+
+    public List<GrantedAuthority> getAuthority() {
+        return privileges
+                .stream()
+                .map((p) -> new SimpleGrantedAuthority(p.name()))
+                .collect(Collectors.toList());
+    }
+}
+```
+
+注意到每种角色还包含了权限信息, 这一点其实符合 RBAC 模型 (role-based access control), 每个用户有多种身份, 每种身份又有多种权限
+
+```java
+package icu.buzz.security.entities;
+
+import com.baomidou.mybatisplus.annotation.EnumValue;
+import lombok.Getter;
+
+@Getter
+public enum Privilege {
+    READ(1, "read"),
+    WRITE(2, "write"),
+    DELETE(3, "delete"),
+    UPDATE(4, "update");
+
+    @EnumValue
+    private final int id;
+    private final String desc;
+
+    Privilege(int id, String desc) {
+        this.id = id;
+        this.desc = desc;
+    }
+}
+```
+
+>   从注解 @EnumValue 也能看出来, 当时设计的时候是想着把各种关系通过多表的形式保存在数据库中的, 但毕竟 role 和 privilege 的映射关系相对比较固定, 并且也只是想着让 role 以一种包含的关系呈现, 因此也没有设计 user 和 role 的多表关系
+
+类型 Role 还提供了一个莫名其妙的方法 getAuthority 这个其实是 UserDetails 的要求, 具体的引用可以看 JwtUser
+
+```java
+package icu.buzz.security.entities;
+
+import lombok.Data;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
+
+import java.util.Collection;
+import java.util.List;
+
+@Data
+public class JwtUser extends User implements UserDetails {
+    public JwtUser() {
+    }
+
+    public JwtUser(User user) {
+        super(user.getUid(), user.getUsername(), user.getPassword(), user.getEnabled(), user.getRole());
+    }
+
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        Role role = super.getRole();
+        List<GrantedAuthority> authority = role.getAuthority();
+        authority.add((GrantedAuthority) () -> "ROLE_" + role.name());
+        return authority;
+    }
+
+    @Override
+    public String getPassword() {
+        return super.getPassword();
+    }
+
+    @Override
+    public String getUsername() {
+        return super.getUsername();
+    }
+
+    @Override
+    public boolean isAccountNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isAccountNonLocked() {
+        return true;
+    }
+
+    @Override
+    public boolean isCredentialsNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return super.getEnabled();
+    }
+}
+```
+
+其实和 User 没什么区别, 主要在于实现了接口 UserDetails, 主要是实现了方法 getAuthorities, 返回权限信息
+
+
+
+
+
+
 
