@@ -1628,9 +1628,507 @@ public class JwtUser extends User implements UserDetails {
 
 其实和 User 没什么区别, 主要在于实现了接口 UserDetails, 主要是实现了方法 getAuthorities, 返回权限信息
 
+### register
 
+除了简单的登录操作之外, 还提供了注册功能, 因为也是和权限控制相关的, 因此将该功能放在了 AuthController 中
 
+```java
+/**
+ * when user sign up, an email is needed, but for now, just use LoginRequest to simulate the sign-up process
+ */
+@PostMapping("/sign-up")
+public ResponseEntity<Void> signUp(@RequestBody LoginRequest request) {
+    User user = authService.signUp(request);
+    return ResponseEntity.ok().build();
+}
+```
 
+一般情况下用户注册的时候都需要填写一堆信息, 这里就一切从简, 直接使用 LoginRequest 封装, 现在的用户注册输入用户名和密码就好了
 
+```java
+@Service
+public class AuthServiceImpl implements AuthService {
 
+    @Override
+    public User signUp(LoginRequest request) {
+        if (userDetailsService.userPresent(request.getUsername())) {
+            throw new UsernameAlreadyExistException(Map.of(ExceptionConstant.USERNAME_ALREADY_EXIST, request.getUsername()));
+        }
+        return userDetailsService.saveUser(request.getUsername(), passwordEncoder.encode(request.getPassword()));
+    }
+}
+```
 
+注册之前首先需要确定当前用户尚未被注册过, 首先需要从 UserDetailsServiceImpl 中查找当前用户名下用户的注册信息, 如果当前用户已经注册过了, 会抛出自定义异常 UsernameAlreadyExistException
+
+否则, 只要当前用户没有注册过, 就可以将该用户名和密码保存在数据库中 -> 注意这里在保存密码的时候需要使用注入的 password encoder 对密码编码 (在用户的登录的时候不需要手动编码, spring security 会在校验的时候编码, 但注册页并没有直接被 spring security 管理, 这里需要手动编码)
+
+```java
+@Service
+public class UserDetailsServiceImpl implements UserDetailsService {
+    private final RedisUtil redisUtil;
+    private final UserMapper userMapper;
+
+    public boolean userPresent(String username) {
+        Object jwtUser = redisUtil.get(username);
+        if (jwtUser != null) {
+            return true;
+        }
+        List<User> users = userMapper.selectList(new QueryWrapper<User>().lambda().eq(User::getUsername, username));
+        return !users.isEmpty();
+    }
+
+    public User saveUser(String username, String password) {
+        User user = new User();
+        user
+                .setUsername(username)
+                .setPassword(password)
+                .setRole(Role.USER)
+                .setEnabled(true);
+        userMapper.insert(user);
+        return user;
+    }
+}
+```
+
+因为本例使用了 redis 加速用户查找, 以 username 为 key, 以查询到的 User 为 value; 因此这里在检查用户是否存在的时候不会无脑查询数据库, 先到 no sql 里面查查看
+
+注册用户的时候仅仅提供了用户名和密码, 因此这里保存用户的时候一切其他的字段都被填写为默认值
+
+### logout
+
+有登录就有登出
+
+```java
+@PostMapping("/logout")
+public ResponseEntity<Void> logout() {
+    authService.logout();
+    return ResponseEntity.ok().build();
+}
+```
+
+反正一切权限相关的信息都交给 AuthService 处理了
+
+```java
+@Override
+public void logout() {
+    UserDetails currentUser = contextUtil.getCurrentUser();
+    userDetailsService.unloadUserByUsername(currentUser.getUsername());
+}
+```
+
+因为只要用户登录了, 那么在当前调用链的上下文中, spring security 就会保存用户信息 -> UserDetails; 所以 logout 请求时是需要携带 jwt 信息的, 未携带 jwt 的 logout 请求都会被 spring security 拦截 (显然注册请求是不需要携带 jwt 信息的)
+
+UserDetailsService 接口需要实现方法 loadUserByUsername, 这个是 spring security 根据用户名查询用户信息的方法, 从而完成用户登录; 而现在到了登出接口, 这里就自定义了方法 unloadUserByUsername, 表示根据用户名完成登出
+
+```java
+package icu.buzz.security.util;
+
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.stereotype.Component;
+
+@Component
+public class ContextUtil {
+
+    public UserDetails getCurrentUser() {
+        return (UserDetails) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+    }
+}
+```
+
+ContextUtil 其实没有什么特别的, 就是调一下 spring security 默认提供的方法 ...
+
+>   后面会说一下这个调用链
+
+```java
+@Service
+public class UserDetailsServiceImpl implements UserDetailsService {
+    
+    /**
+     * remove User by username
+     */
+    public void unloadUserByUsername(String username) {
+        redisUtil.delete(username);
+    }
+}
+```
+
+在登录的最后一个阶段, 主动将 username -> User pair 保存在 redis 中, 这里的登出也就是把这个 pair 删除掉
+
+### security config
+
+>   大的要来了
+
+讲道理, 之前的 AuthConfig 也算是 security config 的一部分, 配置了 AuthenticationManager, AuthenticationProvider, PasswordEncoder
+
+而这里的 security 更进一步, 进行了具体的权限控制; 而且在 spring security 6 之后, 这个配置类和之前的配置已经很不一样了, 官网上可以查到 ...
+
+```java
+package icu.buzz.security.config;
+
+import icu.buzz.security.constant.SecurityConstant;
+import icu.buzz.security.entities.Role;
+import icu.buzz.security.filter.JwtAuthenticationFilter;
+import icu.buzz.security.handler.CustomAccessDeniedHandler;
+import icu.buzz.security.handler.CustomAuthenticationEntryPoint;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+// this configuration will enable default SecurityFilterChain
+@EnableWebSecurity
+@Configuration
+public class SecurityConfig {
+	private JwtAuthenticationFilter jwtAuthenticationFilter;
+
+	private CustomAuthenticationEntryPoint customAuthenticationEntryPoint;
+	private CustomAccessDeniedHandler customAccessDeniedHandler;
+
+	@Autowired
+	public void setJwtAuthenticationFilter(JwtAuthenticationFilter jwtAuthenticationFilter) {
+		this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+	}
+
+	@Autowired
+	public void setCustomAuthenticationEntryPoint(CustomAuthenticationEntryPoint customAuthenticationEntryPoint) {
+		this.customAuthenticationEntryPoint = customAuthenticationEntryPoint;
+	}
+
+	@Autowired
+	public void setCustomAccessDeniedHandler(CustomAccessDeniedHandler customAccessDeniedHandler) {
+		this.customAccessDeniedHandler = customAccessDeniedHandler;
+	}
+
+	@Bean
+    public SecurityFilterChain filterChain(HttpSecurity http, AuthenticationManager authenticationManager) throws Exception {
+		http
+				// any request must be authenticated
+				.authorizeHttpRequests((authorize) -> authorize
+						// permit request to `login` and `sign up`
+						.requestMatchers(HttpMethod.POST, SecurityConstant.SYSTEM_WHITELIST).permitAll()
+						// permit request to `error` controller (compromise)
+						.requestMatchers(SecurityConstant.ERROR_RESOURCE).permitAll()
+						// only users with admin can access `/admin/**`
+						.requestMatchers(SecurityConstant.ADMIN_RESOURCE).hasRole(Role.ADMIN.name())
+						// all users signing up can access `/user/**`
+						.requestMatchers(SecurityConstant.USER_RESOURCE).hasAnyRole(Role.USER.name(), Role.ADMIN.name())
+						// anonymous users can access `/public/**`
+						.requestMatchers(SecurityConstant.PUBLIC_RESOURCE).permitAll()
+						.anyRequest().authenticated())
+				// in a jwt based system, csrf protection is not needed -> (two stage token is recommended -> refresh token and in-memory jwt token)
+				.csrf(AbstractHttpConfigurer::disable)
+				// jwt filter must be before UsernamePasswordAuthenticationFilter
+				// server will check the jwt token first, then use username&password second
+				// all request need to be authenticated, if jwt filter hits, username&password filter will not be executed
+				.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+				.authenticationManager(authenticationManager)
+				.httpBasic(Customizer.withDefaults())
+				// the server never creates a session
+				.sessionManagement((session) -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+				.exceptionHandling((exception) -> exception
+						.authenticationEntryPoint(customAuthenticationEntryPoint)
+						.accessDeniedHandler(customAccessDeniedHandler)
+				);
+		// most time BearerTokenAuthenticationEntryPoint and BearerTokenAccessDeniedHandler are enough
+//				.exceptionHandling((exception) -> exception
+//						.authenticationEntryPoint(new BearerTokenAuthenticationEntryPoint())
+//						.accessDeniedHandler(new BearerTokenAccessDeniedHandler())
+//				);
+
+		return http.build();
+	}
+
+}
+```
+
+这里 SecurityConfig 其实就是向 spring 注入了一个 SecurityFilterChain 的 bean, 这个 filter chain 是 spring security 实现请求过滤的关键; 在 spring security 官方的建议里, 推荐使用 lambda 的方式进行配置
+
+首先配置了拦截/放行的路径, 默认放行登录和注册页面 (仅 post 请求), 放行了 error 资源页 (妥协设计); 所有路径带有 /admin 的请求都需要当前用户至少具有 admin role, 所有路径带有 /user 的请求都需要当前用户至少需要 user role (从设计上 admin role 包含了 user role)
+
+>   其实 /admin 和 /user 下啥也没有, 这里就是给出两个示例表示 spring security 对于权限的控制
+
+然后关闭了 csrf 攻击的防御, 因为本例使用的 jwt 信息并不会保存在 cookie 中; 然后配置了自定义的 Filter, JwtAuthenticationFilter, 这个过滤器会尝试根据 http request 中的 jwt 获取用户信息, 并保存在 spring security 的 context 中
+
+>   从认证行为上, JwtAuthenticationFilter 和 UsernamePasswordAuthenticationFilter 是类似的, 一个是根据 jwt 获取 UserDetails, 一个是根据 username 和 password 获取 UserDetails
+
+然后为该调用链配置 AuthenticationManager (在之前的 AuthConfig 中注入的 bean); 因为 jwt 是无状态的, 因此 server 并不需要维护 session, 所以这里也将 session 关闭了
+
+最后就是配置了异常处理类, 这里主要配置了两个异常处理类, 一个是 AuthenticationEntryPoint 类型, 表示用户未通过授权; 另一个是 AccessDeniedHandler 表示该用户通过了认证, 但认证信息中用户的权限不足以访问其需要访问的资源
+
+>   很多时候这两个 handler 并没有想象中的那么好用, 所以有些异常我都通过转发的形式主动让全局的异常处理器处理了 ...
+
+### jwt filter
+
+该 filter 的任务其实很简单, 就是解析 jwt token, 然后根据解析的 jwt token 获取用户信息, 这里的 filter 继承了 BasicAuthenticationFilter, 就像它在源码中描述的那样, 该 filter 的主要目的是解析 http header 中的 Authentication 字段
+
+```java
+package icu.buzz.security.filter;
+
+import icu.buzz.security.constant.SecurityConstant;
+import icu.buzz.security.service.JwtService;
+import io.jsonwebtoken.JwtException;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+
+@Component
+public class JwtAuthenticationFilter extends BasicAuthenticationFilter {
+
+    private JwtService jwtService;
+    private UserDetailsService userDetailsService;
+
+    @Autowired
+    public JwtAuthenticationFilter(AuthenticationManager authenticationManager) {
+        super(authenticationManager);
+    }
+
+    @Autowired
+    public void setJwtService(JwtService jwtService) {
+        this.jwtService = jwtService;
+    }
+
+    @Autowired
+    public void setUserDetailsService(UserDetailsService userDetailsService) {
+        this.userDetailsService = userDetailsService;
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws IOException, ServletException {
+        String token = request.getHeader(SecurityConstant.TOKEN_HEADER);
+
+        if (token == null || !token.startsWith(SecurityConstant.TOKEN_PREFIX)) {
+            SecurityContextHolder.clearContext();
+            chain.doFilter(request, response);
+            return;
+        }
+
+        // check jwt token
+        token = token.replace(SecurityConstant.TOKEN_PREFIX, "");
+        if (SecurityContextHolder.getContext().getAuthentication() == null) {
+            try {
+                if (jwtService.tokenExpire(token)) request.getRequestDispatcher("/error/expired-jwt-token").forward(request, response);
+                String username = jwtService.extractUsername(token);
+                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                // current context need an authentication token, just new an instance
+                // set UserDetails as principal, token as credentials
+                UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(userDetails, token, userDetails.getAuthorities());
+                SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+            } catch (JwtException e) {
+                // dispatch the request, so that global exception handler can handle this exception
+                request.getRequestDispatcher("/error/invalid-jwt-token").forward(request, response);
+            }
+        }
+        chain.doFilter(request, response);
+    }
+}
+```
+
+filter 首先会尝试获取 http header 中的 Authentication 字段, 要注意的是, 本例中 jwt token 都是以 Bearer 开头的, 因此这里还对前缀进行了检测
+
+要注意的是, 请求首先会进入 filter 才会进到 controller 中, 在 filter 中抛出的异常不会被 GlobalExceptionHandler 捕获, 因此这里抛出异常的方式十分特别, 主动讲请求分发到 error url 上
+
+>   GlobalExceptionHandler 通过 @RestControllAdvice 声明, 处理的是在 controller 调用链中出现的异常, 但无论如何必须先进到 controller 内部
+
+filter 首先检查 jwt 的是否过期, 然后从 jwt 中提取用户名, 并通过 UserDetailsService 获取该用户, 并讲查询到的 UserDetails 保存在 spring security 的上下文中
+
+>   这里其实存在隐患, 因为 loadUserByUsername 其实是有可能抛出 runtime exception 的, 分别是查询不到用户, 和查询到了多个用户, 总之是 server 内部的问题, 但如果不处理这个异常的话, server 应该会直接挂掉
+
+注意到这里保存的 AuthenticationToken 和之前在处理 login 请求时创建的类型相同, 只不过在 login 中 token 还需要进一步认证, 调用 authentication manager 进一步处理, 而在 jwt filter 中, 声明的就是一个已经授权好的 AuthenticationToken 了, 直接保存在 security 的上下文中即可
+
+这里的 AuthenticationToken 在创建时, 需要传入三个参数: principal, credential, authorities, 分别对应了实际传入的参数, userDetails, token, userDetails.getAuthorities(); 正是因此, 之前在 ContextUtil 中, 需要获取当前用户的时候, 获取的是 authentication 的 principal
+
+### error controller
+
+这部分其实是妥协设计, 通过访问 error controller 中的路径的方式, 使得 global expcetion handler 可以处理异常
+
+```java
+package icu.buzz.security.controller;
+
+import icu.buzz.security.exception.ExpiredJwtTokenException;
+import icu.buzz.security.exception.InvalidJwtTokenException;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
+
+/**
+ * this controller is used to throw exception that can be handled by the global exception handler
+ * all url should be denied to client by default
+ */
+@RestController
+@RequestMapping("/error")
+public class ErrorController {
+
+    @GetMapping("/invalid-jwt-token")
+    public void throwInvalidJwtTokenException() {
+        throw new InvalidJwtTokenException(Map.of());
+    }
+
+    @GetMapping("/expired-jwt-token")
+    public void throwExpiredJwtTokenException() {
+        throw new ExpiredJwtTokenException(Map.of());
+    }
+}
+```
+
+### expcetion and handler
+
+在本例中, 所有的 exception 都继承了类 BaseException
+
+```java
+package icu.buzz.security.exception;
+
+import icu.buzz.security.entities.ErrorCode;
+import lombok.Getter;
+
+import java.util.Map;
+
+@Getter
+public class BaseException extends RuntimeException {
+    private final ErrorCode errorCode;
+    private final transient Map<String, Object> map;
+
+    public BaseException(ErrorCode errorCode, Map<String, Object> map) {
+        super(errorCode.getMessage());
+        this.errorCode = errorCode;
+        this.map = map;
+    }
+}
+```
+
+本质上也是一个 RuntimeException, 在其基础上定义了类型 ErrorCode 保存错误信息, 并使用一个 map 表示具体出错的内容 (可选部分)
+
+```java
+package icu.buzz.security.entities;
+
+import lombok.Getter;
+import org.springframework.http.HttpStatus;
+
+@Getter
+public enum ErrorCode {
+    USER_NAME_ALREADY_EXIST(1001, HttpStatus.BAD_REQUEST,  "user already exist"),
+    USER_NAME_NOT_FOUND(1002, HttpStatus.NOT_FOUND , "user not found"),
+    INVALID_JWT_TOKEN(1003, HttpStatus.UNAUTHORIZED, "jwt token illegal"),
+    MULTIPLE_USER_FOUND(1004, HttpStatus.INTERNAL_SERVER_ERROR, "multiple user found"),
+    PASSWORD_MISMATCH(1005, HttpStatus.BAD_REQUEST, "password mismatch"),
+    USER_NOT_AVAILABLE(1006, HttpStatus.FORBIDDEN, "user not available"),
+    EXPIRED_JWT_TOKEN(1007, HttpStatus.UNAUTHORIZED, "jwt token expired"),
+    ;
+
+    private final int code;
+    private final HttpStatus status;
+    private final String message;
+
+    ErrorCode(int code, HttpStatus status, String message) {
+        this.code = code;
+        this.status = status;
+        this.message = message;
+    }
+}
+```
+
+ErrorCode 是一个枚举类型, 封装了异常消息 message, 以及出现该异常时, 需要设置的 http status code; 并再次基础上, 自定义了 error code, 用来指示前端具体的错误信息
+
+这里一共定义了 7 种 ErrorCode, 对应了自定义的 7 种异常, 具体的每种异常的写法都是类似的, 就不多赘述了
+
+```java
+package icu.buzz.security.handler;
+
+import icu.buzz.security.dto.ErrorResponse;
+import icu.buzz.security.exception.*;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    /**
+     * handle exception: current username has already in use
+     */
+    @ExceptionHandler(UsernameAlreadyExistException.class)
+    public ResponseEntity<ErrorResponse> handleUsernameAlreadyExist(UsernameAlreadyExistException e, HttpServletRequest request) {
+        return simpleErrorHandling(e, request.getRequestURI());
+    }
+
+    /**
+     * handle exception: username not found
+     */
+    @ExceptionHandler(UsernameNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleUsernameNotFound(UsernameNotFoundException e, HttpServletRequest request) {
+        return simpleErrorHandling(e, request.getRequestURI());
+    }
+
+    @ExceptionHandler(PasswordMismatchException.class)
+    public ResponseEntity<ErrorResponse> handlePasswordMismatch(PasswordMismatchException e, HttpServletRequest request) {
+        return simpleErrorHandling(e, request.getRequestURI());
+    }
+
+    /**
+     * handle exception: multiple users found (internal exception)
+     */
+    @ExceptionHandler(MultiUserFoundException.class)
+    public ResponseEntity<ErrorResponse> handleMultiUserFound(MultiUserFoundException e, HttpServletRequest request) {
+        return simpleErrorHandling(e, request.getRequestURI());
+    }
+
+    /**
+     * handle exception: invalid jwt token
+     */
+    @ExceptionHandler(InvalidJwtTokenException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidToken(InvalidJwtTokenException e, HttpServletRequest request) {
+        return simpleErrorHandling(e, request.getRequestURI());
+    }
+
+    /**
+     * handle exception: expired jwt token
+     */
+    @ExceptionHandler(ExpiredJwtTokenException.class)
+    public ResponseEntity<ErrorResponse> handleExpiredToken(ExpiredJwtTokenException e, HttpServletRequest request) {
+        return simpleErrorHandling(e, request.getRequestURI());
+    }
+    
+    /**
+     * handle exception: user not available (disabled, locked, expired)
+     */
+    @ExceptionHandler(UserNotAvailableException.class)
+    public ResponseEntity<ErrorResponse> handleUserNotAvailable(UserNotAvailableException e, HttpServletRequest request) {
+        return simpleErrorHandling(e, request.getRequestURI());
+    }
+
+    /**
+     * simple error handling
+     * construct an error response from exception
+     */
+    private ResponseEntity<ErrorResponse> simpleErrorHandling(BaseException e, String uri) {
+        ErrorResponse response = new ErrorResponse(e.getErrorCode(), uri, e.getMap());
+        return ResponseEntity.status(e.getErrorCode().getStatus()).body(response);
+    }
+}
+
+```
+
+简单来说, 出现了异常后, 就返回一个 ErrorResponse 对象, 该对象通过对 ErrorCode 和请求 uri 封装得到
