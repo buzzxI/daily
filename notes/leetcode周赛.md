@@ -8529,12 +8529,6 @@ class Trie {
 ```
 
 
-
- 
-
-
-
-
 ## [100216. K 个不相交子数组的最大能量值 (Maximum Strength of K Disjoint Subarrays)](https://leetcode.cn/classic/problems/maximum-strength-of-k-disjoint-subarrays/description/)
 
 <div style="text-align:center;">
@@ -8599,6 +8593,450 @@ class Solution {
     }
 }
 ```
+
+# [第 126 场双周赛](https://leetcode.cn/contest/biweekly-contest-126/)
+
+## [100262. 求出加密整数的和 (Find the Sum of Encrypted Integers)](https://leetcode.cn/classic/problems/find-the-sum-of-encrypted-integers/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/find-the-sum-of-encrypted-integers/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/17/21:40:31:100262.png" />
+	</a>
+</div>
+模拟题, 每个数字挨个位数查看, 记录最大的, 然后合并
+
+```java
+class Solution {
+    public int sumOfEncryptedInt(int[] nums) {
+        int n = nums.length;
+        for (int i = 0; i < n; i ++) {
+            int[] freq = new int[10];
+            int cnt = 0;
+            while (nums[i] != 0) {
+                int re = nums[i] % 10;
+                nums[i] /= 10;
+                freq[re] ++;
+                cnt ++;
+            }
+            int j = 9;
+            while (freq[j] == 0) j --;
+            int base = 0;
+            while (cnt > 0) {
+                base *= 10;
+                base += j;
+                cnt --;
+            }
+            nums[i] = base;
+        }
+        
+        int rst = 0;
+        for (int num : nums) rst += num;
+        return rst;
+    }
+}
+```
+
+
+## [3080. 执行操作标记数组中的元素 (Mark Elements on Array by Performing Queries)](https://leetcode.cn/classic/problems/mark-elements-on-array-by-performing-queries/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/mark-elements-on-array-by-performing-queries/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/17/21:32:51:3080.png" />
+	</a>
+</div>
+
+本题每次弹出的最小的元素, 因此一个堆就可以了 ...
+
+编码细节上, 使用一个 mark 数组表示每个下标的元素是否已经被标识了
+
+```java
+class Solution {
+    public long[] unmarkedSumArray(int[] nums, int[][] queries) {
+        int n = nums.length;
+		// 绑定下标和每个位置的元素
+        int[][] b = new int[n][2];
+		// 统计数组和
+        long sum = 0;
+        for (int i = 0; i < n; i ++) {
+            b[i][0] = nums[i];
+            b[i][1] = i;
+            sum += nums[i];
+        }
+
+        Queue<int[]> q = new PriorityQueue<>((n1, n2) -> n1[0] == n2[0] ? n1[1] - n2[1] : n1[0] - n2[0]);
+
+        for (int i = 0; i < n; i ++) q.offer(b[i]);
+
+        int m = queries.length;
+        long[] rst = new long[m];
+
+        int[] mark = new int[n];
+
+        for (int i = 0; i < m; i ++) {
+            // 先标记最小的 queries[i][1] 个数字
+            while (!q.isEmpty() && queries[i][1] > 0) {
+                int[] tmp = q.poll();
+				
+               	// 遇到已经标记的直接跳过, 否则执行标记
+                if (mark[tmp[1]] == 0) {
+                    sum -= tmp[0];
+                    mark[tmp[1]]++;
+                } else continue;
+				
+                // 如果遇到了 queries[i][0] 就跳过, 不计入 queries[i][1]
+                if (tmp[1] == queries[i][0]) continue;
+
+                queries[i][1] --;
+            }
+			
+            // 如果当前位置还没有被标记过, 就标记
+            if (mark[queries[i][0]] == 0) {
+                sum -= nums[queries[i][0]];
+                mark[queries[i][0]]++;
+            }
+
+            rst[i] = sum;
+        }
+        return rst;
+    }
+}
+```
+
+>   本题的比较考验编码细节
+
+
+## [100249. 替换字符串中的问号使分数最小 (Replace Question Marks in String to Minimize Its Value)](https://leetcode.cn/classic/problems/replace-question-marks-in-string-to-minimize-its-value/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/replace-question-marks-in-string-to-minimize-its-value/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/17/21:20:42:100249.png" />
+	</a>
+</div>
+
+>   本题太容易 WA 了
+
+根据题意, 显然出现频率小的 cost 更小, 因此在进行替换的时候, 应该尽可能使用出现频率小的字符替换 '?'
+
+因此在遍历一次字符串之后, 每种已有字符的出现频率就确定了; 此后再遍历一次字符串, 一边遍历一边更新字符的出现频率, 每次使用出现频率最小的字符替换 '?'
+
+但这样还不够, 因为题目要求返回字典序最小的, 因此还需要对所有替换 '?' 的字符进行排序, 尽可能将小字符排在靠前的位置
+
+```java
+class Solution {
+    public String minimizeStringValue(String s) {
+        int[] freq = new int[26];
+        
+        char[] cs = s.toCharArray();
+        int n = cs.length;
+        
+        for (int i = 0; i < n; i ++) {
+            if (cs[i] != '?') freq[cs[i] - 'a'] ++;
+        }
+        
+        List<Integer> list = new ArrayList<>();
+        
+        for (int i = 0; i < n; i ++) {
+            if (cs[i] == '?') {
+                int idx = 0;
+                for (int j = 1; j < 26; j++) {
+                    if (freq[j] < freq[idx]) idx = j;
+                }
+                list.add(idx);
+                freq[idx]++;
+            }
+        }
+        
+        Collections.sort(list);
+        int idx = 0;
+        for (int i = 0; i < n; i++) {
+            if (cs[i] == '?') cs[i] = (char)(list.get(idx++) + 'a');
+        }
+        
+        return new String(cs);
+    }
+}
+```
+
+>   本题容易 WA 的第一个点: 不等第一次遍历结束就替换 '?', 因为如果没有先统计一次各个字符的顺序就填充, 最后得到不一定是全局下每种字符出现的频率都是最小的, 比如: '?aa', 显然如果第一次遍历就填充, 就填成: 'aaa' 了
+>
+>   本题容易 WA 的第二个点: 不等第二次遍历结束就替换 '?', 因为如果直接替换的话, 方案肯定是 cost 最小的, 但不一定是字典序最小的
+>
+>   是的, 我当时就是 WA 了两发
+
+## [100241. 求出所有子序列的能量和 (Find the Sum of the Power of All Subsequences)](https://leetcode.cn/classic/problems/find-the-sum-of-the-power-of-all-subsequences/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/find-the-sum-of-the-power-of-all-subsequences/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/17/16:32:07:100241.png" />
+	</a>
+</div>
+
+比赛的时候想到使用 dp 了, 本来以为求解的是子序列的个数, 但这个题其实求解的**满足的子序列所在的子序列的个数**; 听起来有点绕, 其实只要能求解出各个满足条件的子序列的长度即可
+
+假设加和为 k 的子序列长度为 m, 整个数组长度为 n, 那么剩下的 n - m 个数字都可以选择性的加入该子序列, 因此一共有 $2^\text{n - m}$ 个包含了目标子序列的子序列 ...
+
+因此本题其实要求的是满足目标条件的子序列的长度, 定义状态 f\[i]\[j][k] 表示前 i 个数字中, 满足加和为 j 的, 且长度为 k 的子序列个数, 显然对于当前枚举的位置有选和不选两种操作:
+
+*   如果选, 则 f\[i]\[j][k] = f\[i - 1]\[j - nums\[i]][k - 1] + 1
+*   如果不选, 则 f\[i]\[j][k] = f\[i - 1]\[j][k]
+
+此时枚举方案数的过程可以被简化为一个二维 01 背包, 自然也可以使用反向遍历优化空间
+
+最后只需要枚举每个子序列的长度, 再做乘积即可
+
+```java
+class Solution {
+    private static final int MOD = (int)1e9 + 7;
+    public int sumOfPower(int[] nums, int k) {
+        int n = nums.length;
+        // f[i][j][k] 前 i 个元素, 子序列和为 j, 长度为 k 的方案数
+        int[][] f = new int[k + 1][n + 1];
+
+        // 长度为 0 的方案有 1 个
+        f[0][0] = 1;
+		// 二维 01 背包
+        for (int i = 1; i <= n; i ++) {
+            for (int j = k; j >= nums[i - 1]; j --) {
+                for (int x = i; x >= 1; x--) f[j][x] = (f[j][x] + f[j - nums[i - 1]][x - 1]) % MOD;
+            }
+        }
+
+        long rst = 0;
+    	
+        // 枚举各个长度的子序列
+        long pow = 1;
+        for (int x = n; x >= 1; x --) {
+            rst = (rst + pow * (long)f[k][x]) % MOD; 
+            pow <<= 1;
+            pow %= MOD;
+        }
+
+        return (int)rst;
+    }
+}
+```
+
+
+# [第 389 场周赛](https://leetcode.cn/contest/weekly-contest-389/)
+
+## [100248. 字符串及其反转中是否存在同一子字符串 (Existence of a Substring in a String and Its Reverse)](https://leetcode.cn/classic/problems/existence-of-a-substring-in-a-string-and-its-reverse/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/existence-of-a-substring-in-a-string-and-its-reverse/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/17/16:28:54:100248.png" />
+	</a>
+</div>
+
+签到题, 直接暴力枚举各个长度为 2 的子字符串即可
+
+```java
+class Solution {
+    public boolean isSubstringPresent(String s) {
+        Set<Integer> set = new HashSet<>();
+        char[] cs = s.toCharArray();
+        int n = cs.length;
+        for (int i = 1; i < n; i ++) {
+            int cur = cs[i] - 'a';
+            int pre = cs[i - 1] - 'a';
+            set.add(pre * 26 + cur);
+        }
+        
+        for (int i = n - 2; i >= 0; i --) {
+            int cur = cs[i] - 'a';
+            int pre = cs[i + 1] - 'a';
+            if (set.contains(pre * 26 + cur)) return true;
+        }
+        return false;
+    }
+}
+```
+
+
+## [100236. 统计以给定字符开头和结尾的子字符串总数 (Count Substrings Starting and Ending with Given Character)](https://leetcode.cn/classic/problems/count-substrings-starting-and-ending-with-given-character/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/count-substrings-starting-and-ending-with-given-character/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/17/16:24:51:100236.png" />
+	</a>
+</div>
+
+c 就一个字符, 记录 c 在字符串 s 中出现的各个位置, 假设一共有 10 个位置, 那么对于一个位置, 其一共可以构成 10 种子字符串, 而第二个位置一共可以构成 9 种子字符串 ...
+
+直接高斯求和
+
+```java
+class Solution {
+    public long countSubstrings(String s, char c) {
+        char[] cs = s.toCharArray();
+        int n = cs.length;
+        List<Integer> list = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            if (cs[i] == c) list.add(i);
+        }
+        int m = list.size();
+        return ((long)m * (m + 1)) >> 1;
+    }
+}
+```
+
+
+## [100255. 成为 K 特殊字符串需要删除的最少字符数 (Minimum Deletions to Make String K-Special)](https://leetcode.cn/classic/problems/minimum-deletions-to-make-string-k-special/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-deletions-to-make-string-k-special/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/17/14:11:10:100255.png" />
+	</a>
+</div>
+
+由于需要比较的是字符出现的频率, 因此可以先对原字符串进行处理, 获取每个字符的词频; 本题的输入范围为 $10^5$ 级别, 因此这里直接暴力枚举最大词频
+
+```java
+class Solution {
+    public int minimumDeletions(String word, int k) {
+        int[] freq = new int[26];
+        int n = word.length();
+        for (int i = 0; i < n; i++) {
+            int idx = word.charAt(i) - 'a';
+            freq[idx]++;
+        }
+        Arrays.sort(freq);
+        int rst = 0x3f3f3f3f;
+        for (int i = 0; i <= freq[25]; i++) {
+            int cnt = 0;
+            for (int j = 0; j < 26; j++) {
+                if (freq[j] < i) {
+                    if (i - freq[j] > k) cnt += freq[j];
+                } else if (freq[j] > i) cnt += freq[j] - i;
+            }
+            rst = Math.min(rst, cnt);
+        }
+        
+        return rst;
+    }
+}
+```
+
+而如果从反向来看, 查看保留的字符的个数, 枚举所有保留字符中出现频率最小的字符, 反而枚举次数更小
+
+```java
+class Solution {
+    public int minimumDeletions(String word, int k) {
+        int[] freq = new int[26];
+        int n = word.length();
+        for (int i = 0; i < n; i++) {
+            int idx = word.charAt(i) - 'a';
+            freq[idx]++;
+        }
+        Arrays.sort(freq);
+        
+        int re = 0;
+        
+        for (int i = 0; i < 26; i++) {
+            int cnt = 0;
+            for (int j = i; j < 26; j++) {
+                // 出现频率最多为 min + k, 保留个数最多为 freq[i] + k
+                cnt += Math.min(freq[j], freq[i] + k);
+            }
+            re = Math.max(re, cnt);
+        }
+        
+        return n - re;
+    }
+}
+```
+
+## [100227. 拾起 K 个 1 需要的最少行动次数 (Minimum Moves to Pick K Ones)](https://leetcode.cn/classic/problems/minimum-moves-to-pick-k-ones/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-moves-to-pick-k-ones/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/17/16:01:30:100227.png" />
+	</a>
+</div>
+
+简单来说, 获取分数的方式可以分为交换和主动设置两种:
+
+*   交换: 任何的 1 可以和相邻的 0 交换, 假设当前位置为 idx, 最近的 1 位置为 j, 则需要交换 abs(idx - j) 次
+*   主动设置: 可以将任意位置的 0 设置为 1; 从贪心的角度出发, 结合上面的思路, 可以在 2 次操作中获取到一个 1
+
+可以看到, 主动设置是一个期望稳定的操作方式, 每 2 次操作一定可以获得分数; 而交换产生的分数就不那么稳定了, 取决于最近的 1 到当前位置的距离
+
+如果某个位置 idx 的两个邻居 idx - 1 和 idx + 1 本身就是 1, 那么此时交换获取分数的操作次数比主动设置获取分数的操作次数更小 -> 1 次交换即可
+
+因此本题的策略顺序是:
+
+*   首先尽可能找一个邻居都是 1 的位置, 直接获取当前位置的 1 (操作次数为 0)
+*   通过邻居一次交换获取 1 (操作次数为 1)
+*   通过主动设置获取 1 (操作次数为 2)
+*   通过更远的交换获取 1 (操作次数 >= 2)
+
+除了最后一步之外, 剩下的操作, 在一个给定的数组中可以快速求解, 这里使用了特判, 如果可以通过 maxChanges 获取到 k 就不再进行更远的交换, 此时操作次数和初始位置 idx 及其周围的 1 的个数相关;
+
+而如果不能通过 maxChanges 获取 k, 则需要考虑位置 idx 的选取, 使得周围的 k - maxChanges 个 1 到 idx 的距离之和最小 -> 这其实是一个中位数贪心的问题, 考虑一个保持了升序关系的数组 nums, 现在需要通过最小的操作让数组中的数字相等 -> 此时将所有数字变为数组的中位数操作次数一定最小
+
+而本题在此基础上更进一步, 现在是对于一个升序的数组 nums, 要求其某个子数组的变为子数组的中位数的操作次数最小, 这里可以使用前缀和数组进行优化:
+
+对于序列: [1, 2, 4, 7, 8], 其中位数为 4, 将所有数字变为中位数的操作可以通过前缀和计算得到, cnt = [4 * 2 - (1 + 2)] + [(7 + 8) - 4 * 2]; 上式中第一部分需要通过数组中小于中位数的前缀和计算得到, 第二部分需要通过数组中大于中位数的前缀和计算得到
+
+```java
+class Solution {
+    public long minimumMoves(int[] nums, int k, int maxChanges) {
+        int n = nums.length;
+        int cnt = 0;
+        int pre = 0;
+        for (int num : nums) {
+            if (num == 1) {
+                pre++;
+                cnt = Math.max(cnt, pre);
+            } else pre = 0;
+        }
+        if (cnt > 3) cnt = 3;
+
+        int re = k - cnt;
+        // 特判 maxChanges 是否可以满足要求
+        if (re <= maxChanges) {
+            if (re > 0) re <<= 1; 
+
+            if (cnt == 0) return re;
+            return (cnt - 1) + re;
+        }
+		
+        // maxChanges 不满足要求, 转化为中位数贪心的问题
+        re = k - maxChanges;
+        List<Integer> list = new ArrayList<>();
+        List<Long> preSum = new ArrayList<>();
+        preSum.add(0L);
+        for (int i = 0; i < n; i ++) {
+            if (nums[i] == 1) {
+                list.add(i);
+                preSum.add(preSum.get(preSum.size() - 1) + i);
+            }
+        }
+
+        int m = list.size();
+
+        long rst = 0x3f3f3f3f3f3f3f3fL;
+        for (int r = re - 1; r < m; r ++) {
+            int l = r - (re - 1);
+            int mid = l + ((r - l) >> 1);
+            long sum = (mid - l) * (long)list.get(mid) - (preSum.get(mid) - preSum.get(l));
+            sum += (preSum.get(r + 1) - preSum.get(mid + 1)) - (r - mid) * (long)list.get(mid);
+            rst = Math.min(rst, sum);
+        }
+
+        return rst + ((long) maxChanges << 1);
+    }
+}
+```
+
+本题一个很关键的点在于, 贪心策略的四个步骤中, 除了第三个步骤, **剩下的步骤都可以合并为中位数贪心**
+
+>   这题再写一遍还是不会, 寄
+
+
+
+
+
+
 
 
 
