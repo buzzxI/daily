@@ -1816,8 +1816,6 @@ public class SecurityConfig {
 				.authorizeHttpRequests((authorize) -> authorize
 						// permit request to `login` and `sign up`
 						.requestMatchers(HttpMethod.POST, SecurityConstant.SYSTEM_WHITELIST).permitAll()
-						// permit request to `error` controller (compromise)
-						.requestMatchers(SecurityConstant.ERROR_RESOURCE).permitAll()
 						// only users with admin can access `/admin/**`
 						.requestMatchers(SecurityConstant.ADMIN_RESOURCE).hasRole(Role.ADMIN.name())
 						// all users signing up can access `/user/**`
@@ -1853,7 +1851,7 @@ public class SecurityConfig {
 
 这里 SecurityConfig 其实就是向 spring 注入了一个 SecurityFilterChain 的 bean, 这个 filter chain 是 spring security 实现请求过滤的关键; 在 spring security 官方的建议里, 推荐使用 lambda 的方式进行配置
 
-首先配置了拦截/放行的路径, 默认放行登录和注册页面 (仅 post 请求), 放行了 error 资源页 (妥协设计); 所有路径带有 /admin 的请求都需要当前用户至少具有 admin role, 所有路径带有 /user 的请求都需要当前用户至少需要 user role (从设计上 admin role 包含了 user role)
+首先配置了拦截/放行的路径, 默认放行登录和注册页面 (仅 post 请求); 所有路径带有 /admin 的请求都需要当前用户至少具有 admin role, 所有路径带有 /user 的请求都需要当前用户至少需要 user role (从设计上 admin role 包含了 user role)
 
 >   其实 /admin 和 /user 下啥也没有, 这里就是给出两个示例表示 spring security 对于权限的控制
 
@@ -1882,6 +1880,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -1889,6 +1888,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import java.io.IOException;
 
@@ -1897,6 +1897,8 @@ public class JwtAuthenticationFilter extends BasicAuthenticationFilter {
 
     private JwtService jwtService;
     private UserDetailsService userDetailsService;
+
+    private HandlerExceptionResolver handlerExceptionResolver;
 
     @Autowired
     public JwtAuthenticationFilter(AuthenticationManager authenticationManager) {
@@ -1913,6 +1915,12 @@ public class JwtAuthenticationFilter extends BasicAuthenticationFilter {
         this.userDetailsService = userDetailsService;
     }
 
+    @Autowired
+    @Qualifier("handlerExceptionResolver")
+    public void setHandlerExceptionResolver(HandlerExceptionResolver handlerExceptionResolver) {
+        this.handlerExceptionResolver = handlerExceptionResolver;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws IOException, ServletException {
         String token = request.getHeader(SecurityConstant.TOKEN_HEADER);
@@ -1927,28 +1935,30 @@ public class JwtAuthenticationFilter extends BasicAuthenticationFilter {
         token = token.replace(SecurityConstant.TOKEN_PREFIX, "");
         if (SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                if (jwtService.tokenExpire(token)) request.getRequestDispatcher("/error/expired-jwt-token").forward(request, response);
-                String username = jwtService.extractUsername(token);
-                UserDetails userDetails = userDetailsService.loadUserByUsername(username);
-                // current context need an authentication token, just new an instance
-                // set UserDetails as principal, token as credentials
-                UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(userDetails, token, userDetails.getAuthorities());
-                SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+                if (!jwtService.tokenExpire(token)) {
+                    String username = jwtService.extractUsername(token);
+                    UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                    // current context need an authentication token, just new an instance
+                    // set UserDetails as principal, token as credentials
+                    UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(userDetails, token, userDetails.getAuthorities());
+                    SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+                }
             } catch (JwtException e) {
-                // dispatch the request, so that global exception handler can handle this exception
-                request.getRequestDispatcher("/error/invalid-jwt-token").forward(request, response);
+                handlerExceptionResolver.resolveException(request, response, null, e);
+                return;
             }
         }
         chain.doFilter(request, response);
     }
 }
+
 ```
 
 filter 首先会尝试获取 http header 中的 Authentication 字段, 要注意的是, 本例中 jwt token 都是以 Bearer 开头的, 因此这里还对前缀进行了检测
 
-要注意的是, 请求首先会进入 filter 才会进到 controller 中, 在 filter 中抛出的异常不会被 GlobalExceptionHandler 捕获, 因此这里抛出异常的方式十分特别, 主动讲请求分发到 error url 上
+要注意的是, 请求首先会进入 filter 才会进到 controller 中, 在 filter 中抛出的异常不会被 GlobalExceptionHandler 捕获, 因此这里需要使用 HandlerExceptionResolver 强制将异常交给 GlobalExceptionHandler 处理
 
->   GlobalExceptionHandler 通过 @RestControllAdvice 声明, 处理的是在 controller 调用链中出现的异常, 但无论如何必须先进到 controller 内部
+>   GlobalExceptionHandler 通过 @RestControllAdvice 声明, 处理的是在 controller 调用链中出现的异常
 
 filter 首先检查 jwt 的是否过期, 然后从 jwt 中提取用户名, 并通过 UserDetailsService 获取该用户, 并讲查询到的 UserDetails 保存在 spring security 的上下文中
 
@@ -1957,41 +1967,6 @@ filter 首先检查 jwt 的是否过期, 然后从 jwt 中提取用户名, 并�
 注意到这里保存的 AuthenticationToken 和之前在处理 login 请求时创建的类型相同, 只不过在 login 中 token 还需要进一步认证, 调用 authentication manager 进一步处理, 而在 jwt filter 中, 声明的就是一个已经授权好的 AuthenticationToken 了, 直接保存在 security 的上下文中即可
 
 这里的 AuthenticationToken 在创建时, 需要传入三个参数: principal, credential, authorities, 分别对应了实际传入的参数, userDetails, token, userDetails.getAuthorities(); 正是因此, 之前在 ContextUtil 中, 需要获取当前用户的时候, 获取的是 authentication 的 principal
-
-### error controller
-
-这部分其实是妥协设计, 通过访问 error controller 中的路径的方式, 使得 global expcetion handler 可以处理异常
-
-```java
-package icu.buzz.security.controller;
-
-import icu.buzz.security.exception.ExpiredJwtTokenException;
-import icu.buzz.security.exception.InvalidJwtTokenException;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.util.Map;
-
-/**
- * this controller is used to throw exception that can be handled by the global exception handler
- * all url should be denied to client by default
- */
-@RestController
-@RequestMapping("/error")
-public class ErrorController {
-
-    @GetMapping("/invalid-jwt-token")
-    public void throwInvalidJwtTokenException() {
-        throw new InvalidJwtTokenException(Map.of());
-    }
-
-    @GetMapping("/expired-jwt-token")
-    public void throwExpiredJwtTokenException() {
-        throw new ExpiredJwtTokenException(Map.of());
-    }
-}
-```
 
 ### expcetion and handler
 
@@ -2094,22 +2069,6 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleMultiUserFound(MultiUserFoundException e, HttpServletRequest request) {
         return simpleErrorHandling(e, request.getRequestURI());
     }
-
-    /**
-     * handle exception: invalid jwt token
-     */
-    @ExceptionHandler(InvalidJwtTokenException.class)
-    public ResponseEntity<ErrorResponse> handleInvalidToken(InvalidJwtTokenException e, HttpServletRequest request) {
-        return simpleErrorHandling(e, request.getRequestURI());
-    }
-
-    /**
-     * handle exception: expired jwt token
-     */
-    @ExceptionHandler(ExpiredJwtTokenException.class)
-    public ResponseEntity<ErrorResponse> handleExpiredToken(ExpiredJwtTokenException e, HttpServletRequest request) {
-        return simpleErrorHandling(e, request.getRequestURI());
-    }
     
     /**
      * handle exception: user not available (disabled, locked, expired)
@@ -2117,6 +2076,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(UserNotAvailableException.class)
     public ResponseEntity<ErrorResponse> handleUserNotAvailable(UserNotAvailableException e, HttpServletRequest request) {
         return simpleErrorHandling(e, request.getRequestURI());
+    }
+    
+    @ExceptionHandler(JwtException.class)
+    public ResponseEntity<ErrorResponse> handleJwtException(JwtException e, HttpServletRequest request) {
+        return simpleErrorHandling(new InvalidJwtTokenException(Map.of("invalid jwt token", e.getMessage())), request.getRequestURI());
     }
 
     /**
