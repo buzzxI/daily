@@ -2096,3 +2096,161 @@ public class GlobalExceptionHandler {
 ```
 
 简单来说, 出现了异常后, 就返回一个 ErrorResponse 对象, 该对象通过对 ErrorCode 和请求 uri 封装得到
+
+## one more thing
+
+上面仅仅是基础的 spring security 和 jwt 的简单应用, 实际的业务开发需求可能更加复杂
+
+### limit login attempts
+
+一个很简单的需求, 如果一个账户在一段时间内登录此时过多, 则会被判定为风险账户, 对账户进行锁定, 一段时间内禁止风险账户登录, 并在一段时间后自动解除锁定
+
+显然这个需求需要记录一个账户在某段时间内的登录次数, 这里在 redis 中通过 key-value pair 维护, 以 <用户名-ip> 为 key, 并以 <失败次数> 为 value, 每次失败的尝试过后自增 value
+
+spring security 提供了很丰富的接口, 其中就包括了监听 authentication 成功/失败的事件, 因此这里可以直接在 authentication 失败的事件处理函数中对登录失败的次数进行统计
+
+>   在 spring 中事件机制的核心是: event, listener, publisher
+>
+>   其中 event 是事件类型, 默认的自定义的事件需要实现接口 ApplicationEvent
+>
+>   listener 中定义了事件处理方法, 监听特定的事件需要实现接口 ApplicationListener\<T\>, 其中 T 表示自定义的事件类型
+>
+>   publisher 用来触发事件, 一般而言自定义的 publisher 中需要保留一个 ApplicationEventPublisher 的引用, 通过调用 publisher 的 publishEvent 方法进行事件触发 (从而被 listener 处理)
+>
+>   一般而言 listener 和 publisher 需要通过 bean 的形式被 spring container 管理, 其中用户程序可以调用 publish 的 publish event 方法进行事件触发
+>
+>   举例来说, 一组可能的 event, listener, publisher 具有如下形式:
+>
+>   ```java
+>   // CustomEvent.java
+>   
+>   import org.springframework.context.ApplicationEvent;
+>   
+>   public class CustomEvent extends ApplicationEvent {
+>       private String message;
+>   
+>       public CustomEvent(Object source, String message) {
+>           super(source);
+>           this.message = message;
+>       }
+>   
+>       public String getMessage() {
+>           return message;
+>       }
+>   }
+>   ```
+>
+>   ```java
+>   // CustomListener.java
+>   
+>   import org.springframework.context.ApplicationListener;
+>   import org.springframework.stereotype.Component;
+>   
+>   @Component
+>   public class CustomEventListener implements ApplicationListener<CustomEvent> {
+>   
+>       @Override
+>       public void onApplicationEvent(CustomEvent event) {
+>           System.out.println("Received custom event - " + event.getMessage());
+>       }
+>   }
+>   ```
+>
+>   ```java
+>   // CustomPublisher.java
+>   
+>   import org.springframework.context.ApplicationEventPublisher;
+>   import org.springframework.stereotype.Component;
+>   
+>   @Component
+>   public class CustomEventPublisher {
+>       private final ApplicationEventPublisher publisher;
+>   
+>       public CustomEventPublisher(ApplicationEventPublisher publisher) {
+>           this.publisher = publisher;
+>       }
+>   
+>       public void publishCustomEvent(String message) {
+>           CustomEvent event = new CustomEvent(this, message);
+>           publisher.publishEvent(event);
+>       }
+>   }
+>   ```
+
+默认情况下 spring security 配置了 DefaultAuthenticationEventPublisher, 但是由于在 jwt 的示例中对 AuthenticationManager 重新进行了配置, 因此这里需要主动为 AuthenticationManager 配置 EventPublisher
+
+```java
+// AuthConfig.java
+
+/**
+ * control the way to authenticate the user
+ */
+@Bean
+public AuthenticationManager authenticationManager(DaoAuthenticationProvider daoAuthenticationProvider, AuthenticationEventPublisher authenticationEventPublisher) {
+    ProviderManager authenticationManager = new ProviderManager(List.of(daoAuthenticationProvider));
+    // 为自定义的 AuthenticationManager 配置默认的 EventPublisher
+    authenticationManager.setAuthenticationEventPublisher(authenticationEventPublisher);
+    return authenticationManager;
+}
+```
+
+这样 publisher 就配好了, 然后就是 authentication event 了, 在 spring security 中, 不仅可以通过继承接口实现 listener 的配置, 还可以通过注解 @EventListener
+
+```java
+// AuthenticationEventListener
+
+@Component
+public class AuthenticationEventListener {
+
+    @EventListener
+    public void onSuccess (AuthenticationSuccessEvent event) {
+        
+    }
+
+    @EventListener
+    public void onFailure(AbstractAuthenticationFailureEvent event) {
+      	
+    }
+}
+```
+
+剩下的就是在 onFailure 中实现账户锁定的逻辑了, 基本上这里就是通过 redis 记录用户失败的次数, 在次数超出限制后, 直接锁定用户; 在 spring security 的 UserDetails 中, 本身就需要实现方法 isAccountNonLocked, 因此这里其实就是在 JwtUser 封装的属性中额外添加一个属性, locked 表示当前用户是否被锁定
+
+但要注意的是, 这里的锁定会在一段事件后自动解除, 因此这里并没有使用一个 boolean 值表示, 反而使用了一个类型为 LocalDateTime 的字段 unlockedTime 表示账户解锁时间, 只要当前时间已经超过了 unlockedTime, 则当前账户就是可以正常访问的; 在锁定用户的时候直接将该值取为当前时间 + 锁定时间即可
+
+之前在 UserDetailsServiceImpl 中实现方法 loadUserByUsername 的时候将查询得到的 User 直接保存在了 redis 中, 这样后续的查询就不需要经过数据库了, 直接查询 redis 即可
+
+由于 User 本质上等价于 UserPo (持久化对象), 而 lock user 的行为本身是在内存中实现的, 没有必要将 unlockedTime 保存在 User 中; 但是将该字段保存在 JwtUser 中也并不合适, 因为实际保存在 redis 中的是 User 对象
+
+>   不要想着用 JwtUser 替换 User 保存在 redis 中, JwtUser 的 authority 实在是太复杂了, json 序列化/反序列化总是出现问题
+
+因此这里使用了一种折中的思路: (add a layer of indirection), 定义类型 UserBo, 其封装了对象 UserPo, 并在其基础上定义了字段 unlockedTime; 最终 JwtUser 中传入的对象变成了 UserBo, redis 中保存的也变成了 UserBo
+
+```java
+// UserBo.java
+
+package icu.buzz.security.entities;
+
+import lombok.Getter;
+import lombok.Setter;
+
+import java.time.LocalDateTime;
+
+@Getter
+@Setter
+public class UserBo extends User {
+    private LocalDateTime unlockedTime;
+
+    public UserBo() {
+    }
+
+    public UserBo(User user) {
+        super(user.getUid(), user.getUsername(), user.getPassword(), user.getEnabled(), user.getRole());
+        this.unlockedTime = LocalDateTime.now();
+    }
+}
+
+```
+
+
+

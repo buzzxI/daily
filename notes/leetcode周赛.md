@@ -4571,7 +4571,7 @@ class Solution {
 
 对于一个数组，其中所有元素都在 minK 和 maxK 之间，可以通过双指针在 $O(n)$ 的时间内求解合法子数组的个数
 
-具体的做法是，枚举区间右端点 i，每轮枚举，尽可能移动左端点 j，使得左端点是恰好满足区间内同时包括 minK 和 maxK 的边界，这样子数组的个数，就是 j(从 j 开始向左的任何一个数组都是满足条件的)
+具体的做法是，枚举区间右端点 i，每轮枚举，尽可能移动左端点 j，使得左端点是恰好满足区间内同时包括 minK 和 maxK 的边界，这样子数组的个数，就是 j (从 j 开始向左的任何一个数组都是满足条件的)
 
 综上，需要先根据区间外的点，将整个数组分段，然后在每段中使用双指针求解
 
@@ -9032,11 +9032,229 @@ class Solution {
 
 >   这题再写一遍还是不会, 寄
 
+# [第 127 场双周赛](https://leetcode.cn/contest/biweekly-contest-127/)
+
+>   我拒绝做 t4, python 和其他语言在实现的时候差的太多了
+>
+>   t1 和 t3 是一个题, 他俩的区别在于输入范围不同 ...
+
+## [100250. 得到更多分数的最少关卡数目](https://leetcode.cn/contest/biweekly-contest-127/problems/minimum-levels-to-gain-more-points/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/contest/biweekly-contest-127/problems/minimum-levels-to-gain-more-points/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/31/20:18:26:100250.png" />
+	</a>
+</div>
+
+>   莉叩酱纯摆子, 只要能赢就行, 走得步数越少越好 ...
+
+一个扣分, 一个加分, 直接修改原数组, 并对其求解前缀和, 这样计算前缀就知道莉叩酱获得的分数, 而后缀就是冬坂五百里获得的分数, 做差, 只要莉叩酱分数比冬坂五百里高就返回即可
+
+```java
+class Solution {
+    public int minimumLevels(int[] possible) {
+        int n = possible.length;
+        for (int i = 0; i < n; i ++) {
+            if (possible[i] == 0) possible[i] = -1;
+        }
+        
+        int[] pre = new int[n + 1];
+        for (int i = 1; i <= n; i ++) pre[i] = pre[i - 1] + possible[i - 1];
+        for (int i = 1; i < n; i ++) {
+            int tmp = pre[i] - (pre[n] - pre[i]);
+            if (tmp > 0) return i;
+        }
+        return -1;
+    }
+}
+```
+
+## [100271. 或值至少为 K 的最短子数组 II](https://leetcode.cn/contest/biweekly-contest-127/problems/shortest-subarray-with-or-at-least-k-ii/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/contest/biweekly-contest-127/problems/shortest-subarray-with-or-at-least-k-ii/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/31/20:24:33:100271.png" />
+	</a>
+</div>
+滑动窗口, 二进制表示中只有 32 bit, 维护各个 bit 的出现频率, 同时记录窗口内的或结果; 枚举子数组的右边界, 在满足条件后尝试更新左边界
+
+注意到或的结果一定是越来越大的, 因此右边界向右移动可以直接在运算结果上修改
+
+```java
+class Solution {
+    private static final int INF = 0x3f3f3f3f;
+    public int minimumSubarrayLength(int[] nums, int k) {
+        int rst = INF;
+        int n = nums.length;
+        int val = 0;
+        int[] freq = new int[32];
+        for (int l = 0, r = 0; r < n; r ++) {
+            // 更新右边界
+            int num = nums[r];
+            val |= num;
+            for (int i = 0; num > 0; i ++, num >>= 1) {
+                if ((num & 1) == 1) freq[i] ++;
+            }
+            // 尝试更新左边界
+            while (l <= r && val >= k) {
+                rst = Math.min(rst, r - l + 1);
+                int ne = nums[l];
+                
+                for (int i = 0; ne > 0; i ++, ne >>= 1) {
+                    if ((ne & 1) == 1) {
+                        freq[i] --;
+                        if (freq[i] == 0) val -= (1 << i);
+                    }
+                }
+                l ++;
+            }
+        }
+        
+        return rst == INF ? -1 : rst;
+    }
+}
+```
 
 
+# [第 391 场周赛](https://leetcode.cn/contest/weekly-contest-391/)
+
+## [100263. 哈沙德数 (Harshad Number)](https://leetcode.cn/classic/problems/harshad-number/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/harshad-number/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/31/20:14:14:100263.png" />
+	</a>
+</div>
+
+模拟, 按位累加, 然后取余
+
+```java
+class Solution {
+    public int sumOfTheDigitsOfHarshadNumber(int x) {
+        int tmp = x;
+        int sum = 0;
+        while (tmp != 0) {
+            sum += tmp % 10;
+            tmp /= 10;
+        }
+        return (x % sum) == 0 ? sum : -1;
+    }
+}
+```
 
 
+## [100235. 换水问题 II (Water Bottles II)](https://leetcode.cn/classic/problems/water-bottles-ii/description/)
 
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/water-bottles-ii/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/31/20:11:28:100235.png" />
+	</a>
+</div>
+
+模拟题, 先喝, 瓶子不够了就去换, 换不了就寄
+
+```java
+class Solution {
+    public int maxBottlesDrunk(int numBottles, int numExchange) {
+        int rst = 0;
+        int empty = 0;
+        int full = numBottles;
+        while (full > 0 || empty >= numExchange) {
+            if (full > 0) {
+                rst += full;
+                empty += full;
+                full = 0;
+            }
+            if (empty >= numExchange) {
+                full ++;
+                empty -= numExchange;
+                numExchange ++;
+            }
+        }
+        return rst;
+    }
+}
+```
+
+
+## [100266. 交替子数组计数 (Count Alternating Subarrays)](https://leetcode.cn/classic/problems/count-alternating-subarrays/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/count-alternating-subarrays/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/31/20:06:41:100266.png" />
+	</a>
+</div>
+
+简单的滑动窗口, 枚举右边界, 记录左边界, 只要当前位置和前一个位置相同, 则更新左边界
+
+```java
+class Solution {
+    public long countAlternatingSubarrays(int[] nums) {
+        long rst = 0;
+        int n = nums.length;
+        for (int l = 0, r = 0; r < n; r ++) {
+            // 当前位置和前一个位置相同时, 更新左边界
+            if (r > 0 && nums[r] == nums[r - 1]) l = r;
+            // 以当前位置为右边界的子数组个数取决于左边界的位置 ...
+            rst += (r - l + 1);
+        }
+        return rst;
+    }
+}
+```
+
+
+## [100240. 最小化曼哈顿距离 (Minimize Manhattan Distances)](https://leetcode.cn/classic/problems/minimize-manhattan-distances/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimize-manhattan-distances/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/31/19:39:25:100240.png" />
+	</a>
+</div>
+
+本题其实是一个数学问题, 通过横纵坐标的变化, 将曼哈顿距离变为切比雪夫距离; 在将其转化为切比雪夫距离之后, 两个节点之间的距离就之和 x/y 中的一个相关了, 此时任意两个节点的最大值可以通过计算最大的 x/y 和最小的 x/y 之间的差值得到
+
+```java
+class Solution {
+    private int INF = 0x3f3f3f3f;
+    public int minimumDistance(int[][] points) {
+        int n = points.length;
+		// 坐标转化
+        TreeMap<Integer, Integer> xs = new TreeMap<>();
+        TreeMap<Integer, Integer> ys = new TreeMap<>();
+        for (int i = 0; i < n; i ++) {
+            int x = points[i][0] + points[i][1];
+            xs.put(x, xs.getOrDefault(x, 0) + 1);
+            int y = points[i][0] - points[i][1];
+            ys.put(y, ys.getOrDefault(y, 0) + 1);
+        }
+        int rst = INF;
+        for (int i = 0; i < n; i ++) {
+            // 枚举去除的节点
+            int x = points[i][0] + points[i][1];
+            int y = points[i][0] - points[i][1];
+            xs.put(x, xs.get(x) - 1);
+            ys.put(y, ys.get(y) - 1);
+            if (xs.get(x) == 0) {
+                xs.remove(x);
+            }
+            if (ys.get(y) == 0) {
+                ys.remove(y);
+            }
+            // 去除后最大距离为两个坐标下的差值更大的那个
+            int xGap = xs.lastKey() - xs.firstKey();
+            int yGap = ys.lastKey() - ys.firstKey();
+            rst = Math.min(rst, Math.max(xGap, yGap));
+            // 最后别忘了加回来
+            xs.put(x, xs.getOrDefault(x, 0) + 1);
+            ys.put(y, ys.getOrDefault(y, 0) + 1);
+        }
+        return rst == INF ? -1 : rst;
+    }
+}
+```
+
+>   线段树也不是不行 ...
 
 
 
