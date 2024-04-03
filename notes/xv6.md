@@ -8,6 +8,48 @@
 
 这个 lab 需要实现一些小工具, 并不涉及到 xv6 的 kernel, 需要编写用户程序, 调用 xv6 提供的 syscall 完成一系列功能
 
+完成这个 lab 之前, 官方建议先看一下 xv6 手册的第一章:
+
+*   xv6 的 shell 是一个 user program (不是 syscall), 默认的 shell 很简单, 就是一个主循环不断从 stdin 读取输入, 同时对于每个读入的 command, 通过 syscall -> fork 一个子进程处理 command; 如果当前 command 需要执行另外的进程, 子进程会执行另外的 syscall -> exec 处理; 在此期间父进程 (shell 本身) 会 wait 子进程的执行结束
+
+    >   默认情况下, xv6 shell 也支持 background jobs, 此时子进程会再次 fork 一个 "孙"子进程, 而子进程会直接结束, 将 job 交给 "孙"子进程处理
+
+*   xv6 使用 file descriptor 表示文件, 所有进程默认启用了三个 fd: stdin(0), stdout(1), stderr(2); 执行 syscall -> fork 会将父进程的地址空间复制一份给子进程, 其中也包括了父进程了 file descriptor table; 执行 syscall -> exec 会对子进程的地址空间进行覆盖, 但保留子进程的 file descriptor table; 这种特性可以使得在 fork 得到子进程后, exec 加载新程序之前, 子进程可以对 fd 进行重定向, 最简单的例子就是重定向 stdin, 使得 stdin 不再来源于 console, 而是来自于某个文件, 对于行为 `cat < input.txt`, 可以表示为:
+
+    ```c
+    char *argv[2];
+    argv[0] = "cat";
+    argv[1] = 0;
+    
+    if(fork() == 0) {
+        close(0);
+        open("input.txt", O_RDONLY);
+        exec("cat", argv);
+    }
+    ```
+
+    xv6 的另外一个特点是, 默认通过 open 返回的 fd 一定是在 file descriptor table 中未使用过的 fd 中最小的那个; 在上面是 snippet 中, open 返回的一定是 0, 此时相当于将 stdin(0) 重定向到了 input.txt;
+
+    >   这里 xv6 对 syscall fork 和 exec 的设计进行了解释, 从实现的角度上, 确实可以将 fork 和 exec 绑定为一个 forkexec 的 syscall, 一步完成子进程的加载执行; 但是这种 syscall 会增加 shell 的实现重定向的难度, 作为父进程的 shell 需要在 forkexec 之前主动重定向自身的 stdin, stdout, stderr; 如果分为两个步骤, 那么 shell 就可以让 fork 得到的子进程负责 IO 重定向, 此时子进程对于 file descriptor table 的修改不会影响父进程, 将重定向的目标由父进程转向为子进程
+
+    在 xv6 中父子进程共享的不止有 file descriptor, 还有 file position, 即父进程对文件的修改, 会使得子进程的 file position 发生变化
+
+    ```c
+    if(fork() == 0) {
+        write(1, "hello ", 6);
+        exit(0);
+    } else {
+        wait(0);
+        write(1, "world\n", 6);
+    }
+    ```
+
+    在上述 snippet 执行结束后, 文件中将被写入 hello world; 在 xv6 中, dup 获得的 fd 和原 fd 之间也是共享的 file position 的, 通过其中一个 fd 对文件进行的修改, 会导致另外一个 fd 对应的 file position 发生变化
+
+    >   不知道这种设计是故意的还是只是 legacy
+
+*   xv 6
+
 ### sleep
 
 这里需要实现的 sleep, 单位是 tick, 即一个时钟周期, 所以在不同的机器上一个 tick 对应的实际物理时间可能是不太一样的

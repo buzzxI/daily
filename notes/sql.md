@@ -210,7 +210,27 @@ select * from user where name != 'buzz';
   
     这里其实已经是第二次见到字符：`^`了，上一次是在集合中，他表示否定这个集合，如果在集合外表示字符串的开始
   
-  * 其实在mysql中可以不使用表，仅使用字符串用来测试正则表达式是否匹配，语法为：`select '字符串' regexp '匹配文本'`，返回0的时候表示不匹配，返回1的时候返回匹配；比如：`select 'hello regexp '[0-9]'`，将返回0，显然`'hello'`不能和数字进行匹配    
+  * 其实在mysql中可以不使用表，仅使用字符串用来测试正则表达式是否匹配，语法为：`select '字符串' regexp '匹配文本'`，返回0的时候表示不匹配，返回1的时候返回匹配；比如：`select 'hello regexp '[0-9]'`，将返回0，显然`'hello'`不能和数字进行匹配
+
+## exists()
+
+一个 sql 的内置函数, 其参数为一个 subquery, 只要 subquery 返回了一行, exists 将返回 1, 比如
+
+```sql
+SELECT exists(SELECT 1 FROM user WHERE username = 'test')
+```
+
+上述查询分为两个阶段, 其中子查询会根据 username 是否为 'test' 返回若干行 (返回的每一行都只有一列 -> 1); 而第二个阶段 exists() 的参数中只要返回了至少一行, exists 函数就会返回 true; 因此上述语句可以用来判断, 表中是否存在 username 为 test 的行 (可能有多个 ...)
+
+甚至可以使用 exists() 实现多表查询
+
+```sql
+SELECT *
+FROM users
+WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_id = users.id);
+```
+
+上述 sql 会返回 user 表中, id 出现在 orders 表中的项
 
 # 创建其他字段
 

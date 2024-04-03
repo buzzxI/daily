@@ -2249,8 +2249,276 @@ public class UserBo extends User {
         this.unlockedTime = LocalDateTime.now();
     }
 }
+```
+
+在 loadUserByUsername 方法中, 会向 redis 中添加一个 UserBo 对象, 并返回一个封装后的 JwtUser 对象
+
+```java
+// UserDetailsServiceImpl.java
+
+@Override
+public UserDetails loadUserByUsername(String username) {
+    UserBo user = (UserBo) redisUtil.get(username);
+    if (user == null) {
+        // query by mybatis-plus
+        List<User> users = userMapper.selectList(new QueryWrapper<User>().lambda().eq(User::getUsername, username));
+        if (users.isEmpty()) {
+            throw new UsernameNotFoundException(Map.of(ExceptionConstant.USERNAME_NOT_FOUND, username));
+        }
+        if (users.size() > 1) {
+            // multiple users found, that should be server internal error
+            throw new MultiUserFoundException(Map.of(ExceptionConstant.MULTIPLE_USER_FOUND, username));
+        }
+        user = new UserBo((users.get(0)));
+        redisUtil.set(user.getUsername(), user);
+    }
+    return new JwtUser(user);
+}
+```
+
+由于 redis template 配置了 value 以 json 的形式保存, 这里使用 spring boot 默认的 jackson 进行 json 序列化和反序列化, 而默认情况下 jackson 是不支持 jdk 8 时间类的序列化/反序列化, 这里需要额外的依赖
+
+```xml
+<!--pom.xml-->
+
+<!--dependency for serialize json for LocalDataTime in jdk 8-->
+<dependency>
+    <groupId>com.fasterxml.jackson.datatype</groupId>
+    <artifactId>jackson-datatype-jsr310</artifactId>
+</dependency>
+```
+
+同时在 ObjectMapper 中配置时间类的 module
+
+```java
+package icu.buzz.security.config;
+
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.PropertyAccessor;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
+import com.fasterxml.jackson.databind.module.SimpleModule;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.serializer.Jackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.StringRedisSerializer;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+
+@Configuration
+public class RedisConfig {
+
+    @Bean("String2ObjectTemplate")
+    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory factory) {
+        RedisTemplate<String, Object> template = new RedisTemplate<>();
+
+        template.setConnectionFactory(factory);
+
+        // string as key
+        StringRedisSerializer keySerializer = new StringRedisSerializer();
+        template.setKeySerializer(keySerializer);
+        template.setHashKeySerializer(keySerializer);
+
+        // object mapper cannot be injected as bean -> default mapper will be covered
+        ObjectMapper objectMapper = new ObjectMapper();
+
+        // add time module for java.time.* serialization
+        objectMapper.registerModule(new JavaTimeModule());
+        // serialize all: getter/setter/fields, regardless of access modifier
+        objectMapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
+        // serialize non-final class only
+        objectMapper.activateDefaultTyping(LaissezFaireSubTypeValidator.instance, ObjectMapper.DefaultTyping.NON_FINAL);
+
+        // object as value
+        Jackson2JsonRedisSerializer<Object> valueSerializer = new Jackson2JsonRedisSerializer<>(objectMapper, Object.class);
+
+        template.setValueSerializer(valueSerializer);
+        template.setHashValueSerializer(valueSerializer);
+        // make sure all configuration is set
+        template.afterPropertiesSet();
+        return template;
+    }
+}
+```
+
+此后 JwtUser 中的 isAccountNonLocked 方法会根据 userBo 中的 lock time 和当前时间的先后返回, 而不是直接返回一个 true
+
+```java
+// JwtUser.java
+
+@Override
+public boolean isAccountNonLocked() {
+    return LocalDateTime.now().isAfter(user.getUnlockedTime());
+}
+```
+
+对于限制用户登录的需求, 需要三个参数进行限制:
+
+*   监控窗口: 对用户失败登录次数进行统计的窗口大小
+*   失败登录次数: 在窗口内登录失败多少次后进行用户锁定
+*   锁定时间: 触发锁定条件后, 一次性锁定用户的时间大小
+
+将这三个参数放在配置文件中进行配置, 并另外使用一个 record 进行记录:
+
+```java
+package icu.buzz.security.config;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties(prefix = "buzz.security")
+public record CommonConfig(LoginConfig loginConfig) {
+    public record LoginConfig(int loginCount, int loginInterval, int lockTime) {
+    }
+}
 
 ```
 
+剩下的就是完成两个事件处理函数了, 要注意的是 AuthenticationEventListener 中处理的两种事件 AuthenticationSuccessEvent 和 AbstractAuthenticationFailureEvent 内部都封装了一个 Authentication  对象, 其中 AuthenticationSuccessEvent 中包含的 Authentication 对象是一个经过了认证的对象, 在本环境中是一个 JwtUser 对象;  AbstractAuthenticationFailureEvent 中包含的 Authentication 对象是一个未经过认证的对象, 在本环境中就是原始的 username (字符串), 注意这两者 principal 的区别
 
+>   要说明的是, spring security 的 DaoAuthenticaionProvider 在完成认证后会将 Credential 删除
+
+因为 spring security 需要先调用 loadUserByUsername, 才进行 username, password 的比较, 因此就算比较认证失败, 那么 redis 中也一定保存了当前用户名的 UserBo 对象
+
+```java
+// AuthenticationEventListener.java
+
+@EventListener
+public void onFailure(AbstractAuthenticationFailureEvent event) {
+    if (event.getException() instanceof BadCredentialsException) {
+        String principal = event.getAuthentication().getPrincipal().toString();
+    	UserBo user = (UserBo) redisUtil.get(principal);
+        String userKey = constructUserKey(principal);
+        Integer attemptCount = (Integer) redisUtil.get(userKey);
+        if (attemptCount != null && attemptCount == commonConfig.loginConfig().loginCount()) {
+            // ban user for a period of time
+            user.setUnlockedTime(LocalDateTime.now().plusSeconds(commonConfig.loginConfig().lockTime()));
+            redisUtil.set(principal, user);
+        } else {
+            if (attemptCount == null) attemptCount = 1;
+            else attemptCount ++;
+            redisUtil.set(userKey, attemptCount, commonConfig.loginConfig().loginInterval());
+        }
+    }
+}
+
+private String constructUserKey(String username) {
+    return username + "_" + ipUtil.getIpAddr();
+}
+```
+
+注意到导致用户认证失败可能有很多原因, 这里的计数仅仅针对于 username 和 password 不匹配的情况, 因此需要先判断当前异常的类型, 只有 BadCreditialsException 才需要这样处理
+
+尽管还是使用 redis 进行失败登录次数进行计数, 但并没有将次数保存在 UserBo 中, 而是额外使用了一个和 ip 相关的 key, 这里使用 ipUtil 进行了 ip 地址的获取
+
+当失败次数达到上限后, 会更新 UserBo 的 unlockedTime, 将其锁定, 这样再次调用 loadUserByUsername 返回的 JwtUser 在对锁定状态进行判断时会发现当前账户已经被锁定了
+
+而当用户完成一次成功的登录后, 需要该计数从 redis 中清除
+
+```java
+// AuthenticationEventListener.java
+
+@EventListener
+public void onSuccess (AuthenticationSuccessEvent event) {
+    JwtUser jwtUser = (JwtUser) event.getAuthentication().getPrincipal();
+    String userKey =  constructUserKey(jwtUser.getUsername());
+    redisUtil.delete(userKey);
+}
+```
+
+上面提到了 IpUtil, 这是一个根据 request 获取 header 的工具类
+
+```java
+package icu.buzz.security.util;
+
+import icu.buzz.security.constant.CommonConstant;
+import icu.buzz.security.constant.HttpHeaderConstant;
+import icu.buzz.security.exception.ServerInternalException;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.Map;
+
+@Component
+public class IpUtil {
+    private HttpServletRequest request;
+
+    @Autowired
+    public void setRequest(HttpServletRequest request) {
+       this.request = request;
+    }
+
+    public String getIpAddr() {
+        String ipAddr = null;
+        boolean flag = false;
+        for (String header : HttpHeaderConstant.IP_HEADERS) {
+            ipAddr = request.getHeader(header);
+            if (ipAddr != null && !ipAddr.isEmpty() && !ipAddr.equals(HttpHeaderConstant.UNKNOWN)) {
+                flag = true;
+                break;
+            }
+        }
+
+        if (flag) {
+            ipAddr = ipAddr.split(",")[0];
+        } else {
+            ipAddr = request.getRemoteAddr();
+            if (ipAddr.equals(CommonConstant.LOCAL_IP)) {
+                try {
+                    ipAddr = InetAddress.getLocalHost().getHostAddress();
+                } catch (UnknownHostException e) {
+                    throw new ServerInternalException(Map.of("internal error", "cannot get ip"));
+                }
+            }
+        }
+
+        return ipAddr;
+    }
+}
+```
+
+获取真实 ip 确实不容易, 需要查询若干个头 ... 这些头已经被打包好封装到了 HttpHeaderConstant 中了
+
+```java
+package icu.buzz.security.constant;
+
+public class HttpHeaderConstant {
+    public static final String[] IP_HEADERS = {
+            "X-Forwarded-For",
+            "X-Real-IP",
+            "Proxy-Client-IP",
+            "WL-Proxy-Client-IP",
+            "HTTP_X_FORWARDED_FOR",
+            "HTTP_X_FORWARDED",
+            "HTTP_X_CLUSTER_CLIENT_IP",
+            "HTTP_CLIENT_IP",
+            "HTTP_FORWARDED_FOR",
+            "HTTP_FORWARDED",
+            "HTTP_VIA,REMOTE_ADDR"
+    };
+    public static final String UNKNOWN = "unknown";
+}
+
+```
+
+>   这个是在网上抄的, 反正就这么多头, 挨个看看吧
+
+现在的 JwtUser 可能被 locked 掉, 在 spring security 中体现为异常 LockException, 因此在 global exception handler 中也需要处理这个异常
+
+```java
+// GlobalExceptionHandler.java
+
+@ExceptionHandler(LockedException.class)
+public ResponseEntity<ErrorResponse> handleLockException(LockedException e, HttpServletRequest request) {
+    return ResponseEntity
+            .status(HttpStatus.UNAUTHORIZED)
+            .body(new ErrorResponse(ErrorCode.USER_LOCKED, request.getRequestURI(), Map.of("user locked", e.getLocalizedMessage())));
+}
+```
 
