@@ -2522,3 +2522,38 @@ public ResponseEntity<ErrorResponse> handleLockException(LockedException e, Http
 }
 ```
 
+# Async
+
+简单来说, 只要在方法上添加注解 @Async 即可将对应的方法体标记为异步方法, spring 在执行的时候会按照异步的方式执行 
+
+>   其实还需要在配置类上添加 @EnableAsync 的注解
+
+spring 官方给出的例子是比较简化的: [Getting Started | Creating Asynchronous Methods](https://spring.io/guides/gs/async-method) 并没有涉及异步任务相关的配置, spring 内部实现异步任务其实是将对应的任务分发给其他异步线程处理, 使得当前处理请求的线程可以提前返回
+
+因此这里的配置也就是异步线程池的配置 + 异常处理
+
+## 线程池
+
+线程池的创建需要一系列参数, 第一次看的话应该会乱掉, 可以参考: [你管这破玩意叫线程池](https://mp.weixin.qq.com/s/b265zSAKYBtUESakVIWl1A) 先大概有点印象:
+
+*   core pool size: 表示线程池中常驻线程的数量, 就算这几个线程是空闲的也不会被线程池回收掉 -> 这个参数会直接影响程序的 CPU 和内存的占用情况, 一般而言, 建议如果异步任务多为耗时短, 但频次高的任务, 该参数可以适当调整的大一点
+*   maximum pool size: 表示线程池中线程数量的上限, 包括那些会被线程池动态创建/回收的线程 -> 一般而言这个参数和峰值下的任务负载相关, 如果设置的太大的话, 会产生线程资源的浪费, 但设置的太小也可能会导致异步任务的排队 (当然也可能导致异步任务被丢掉, 这个取决于拒绝策略)
+*   task queue capacity: 当任务数目大于 core pool size 后, 任务会被保存在 task queue 中 -> 这个参数是用来应对业务突发的, 和业务的实际波动情况相关, 业务波动越剧烈, 越需要一个更大的 task queue
+
+## exception handler
+
+按照官网的说法: When an `@Async` method has a `Future`-typed return value, it is easy to manage an exception that was thrown during the method execution, as this exception is thrown when calling `get` on the `Future` result. With a `void` return type, however, the exception is uncaught and cannot be transmitted. You can provide an `AsyncUncaughtExceptionHandler` to handle such exceptions.
+
+使用 @Async 注解的方法只有两种返回值类型, 要么是 Future, 要么是 void; 对于返回值是 Future 类型的, 当通过 Future.get 获取结果值时, 需要应用程序主动处理异常, 通过 try-catch 块可以捕获这种异常
+
+然而对于返回值为 void 类型的异步方法, 大多数在调用结束后不会再对返回值进行检查, 应用程序无法直接处理异常, 因此这里还需要为异步任务配置一个 exception 处理通用异常
+
+## one more thing
+
+使用 @Async 有几个注意点:
+
+*   不要在同一个类中调用 `@Async` 的方法, 不然方法会被正常顺序调用, 而不是异步方法: 这个其实和 spring 本身的代理模式机制相关, 如果在同一个类中调用异步方法, 那个对应的调用不会被 spring intercept 掉 -> 常规的使用方式就是在一个 bean 中调用另外一个 bean 中的异步方法
+*   不要将 @Async 和 @Transaction 同时使用, @Async 会破坏 @Transaction 的原子性
+
+
+

@@ -502,21 +502,13 @@ group by ta.aid
 ```sql
 lcreate table tableName(
 	...
-    constraint 外键名 foreign key (键列) references 主表名称(主表列名称)
+    constraint [外键名] foreign key ([键列]) references [主表名称] ([主表列名称])
 );
 ```
 
-现在考虑一个很简单的例子，加入现在有两个表，一个学生表，一个教师表
-
-学生表中的每个学生有自己的信息，同时每个学生绑定一个老师
-
-老师表中的老师具有自己信息
-
-学生和老师是多对一的关系
+考虑一个很简单的例子, 假如现在有两个表, 一个学生表, 一个教师表, 其中每个学生需要绑定一个老师, 即学生和老师是多对一的关系
 
 ## 创建外键
-
-创建表：
 
 ```sql
 create table teacher(
@@ -527,18 +519,12 @@ create table student(
 id int not null primary key auto_increment,
 name varchar(30),
 tid int,
-constraint fktid foreign key(tid) references teacher(id));
+constraint fktid foreign key (tid) references teacher(id));
 ```
 
-现在我们如果希望向student表中添加数据，必须保证在teacher表中有某一行和其关联
+显然每个学生的数据在加入表之前, 必须和某个老师关联, 即学生表中的 tid 必须在教师表中出现, 这种约束关系在 sql 中表示为外键约束, 上表中, 外键被定义为了 fktid
 
-所以我们添加学生数据的时候，在填入tid的时候需要保证在teacher表中有某一行的id和其对应；
-
-同时对于teacher表中，如果某一行已经和student表中建立了联系，我们也不能删除这一行
-
-外键是一种约束，我们上面给外键起了一个名字：fktid
-
-起始可以在创建表是之后再添加这个外键的，执行语句：
+外键约束也可以在创建完表之后再添加:
 
 ```sql
 alter table student add constraint fktid foreign key (tid) references teacher(id);
@@ -554,38 +540,28 @@ alter table student drop foreign key if exists fktid;
 
 ## 级联操作
 
-我们建立好外键的映射关系后，现在问题在于我们无法正常删除数据了
+外键会导致原始数据不能正常删除, 对于上面的示例中, 当学生表中完成学生和教师的绑定后, 后续如果希望删除掉教师表中的某个 tid (教师), 则必须先将学生表中对应的 tid 的所有行删除后, 才能删除教师表中的对应教师
 
-再teacher表中，如果我们希望删除，需要先把student表中对应的tid取值的先删除掉，然后再删掉teacher表中的项
-
-既然现在是多对一的关系，一个正常的思路是，主表中（即一）某列进行了改动，我们希望子表中（即多）对应的列也发生改动；在我们这个具体的例子中，我们希望，如果我们更改了某个老师的id，我们希望在student表中对应外键也得到更改，如果我们在teaher表中删除了某个老师，我们希望在student表中也删除对应的行
-
-上面这种操作其实就是级联操作
-
-其实级联操作需要在创建表的时候进行配置：
+因为这种操作太麻烦了, mysql 还给出了备选项, 即级联修改, 比如某个教师的 tid 发生修改后, 所有通过外键关联的子表中的 tid 也发生对应的修改
 
 ```sql
 alter table student add constraint fktid foreign key (tid) references teacher(id)
 on update cascade on delete cascade
 ```
 
-上面配置了外键同步跟新，同步删除
+上述配置了外键同步更新, 同步删除 -> tid 发生修改后, 学生表中对应的 tid 也发生修改, tid 被删除后, 学生表中的学生也会被删除 ...
 
-现在我们就可以删除teacher表中的项了，同时对应于student表中也会被删除；同时如果改变了teacher表中的某一行的主键，在student表中对应的外键也会得到更新
-
-严格意义上的行为不只有同步删除：
+上述的级联操作本质上将父表中的修改同步更新到各个子表, mysql 还提供了更高级的控制选项, 实际中级联命令可以表示为:
 
 ```sql
-on delete action
+on delete [action]
 ```
 
-我们可以指定的`action`：
+其中 action 类型包括:
 
-* `cascade`：同步删除
-* `set null`：删除父表中的项时，子表中的项会被设置为null（这个条件成立的前提是子表对应列中允许存在null值）
-* `no action`、`restrict`：不允许删除父表中的项
-
-> `on update`也差不多
+* `cascade`: 同步修改 (父表删除后, 子表也会被删除)
+* `set null`: 删除父表中的项时, 子表中的项会被设置为 null (当然前提是子表对应列中允许存在 null 值)
+* `no action`, `restrict`: 默认行为, 这俩本质上是一个选项, 即不允许父表中的更新
 
 # 多表
 

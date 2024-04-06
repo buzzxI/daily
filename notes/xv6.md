@@ -48,7 +48,24 @@
 
     >   不知道这种设计是故意的还是只是 legacy
 
-*   xv 6
+*   xv6 也支持 pipe, xv6 原生提供了 syscall -> pipe, 其需要一个大小为 2 的 int 数组作为参数, 完成调用后 p[0] 用来从 pipe 中读取数据, p[1] 用来向 pipe 中写入数据 (类比 stdin 和 stdout, 这两个分别是 0 和 1)
+
+    在 unix 中使用 pipe 可以实现进程之间的通信, 借助 pipe 和 dup, 可以在不修改原程序的情况下, 让一个程序的输出作为另一个程序的输入 -> xv6 的 shell (xv6 支持 pipeline, [command a] | [command b] | [command c] | ... 具体原因在于其在进行 cmdline 解析的时候, 以左侧优先的原则, 同时支持解析 cmdline 的递归调用)
+
+    从执行的结果上来看 pipe 在作用等价于临时文件
+
+    ```shell
+    # pipe
+    $ echo 'hello pipe' | wc
+    # redirect
+    $ echo 'hello pipe' > /tmp/log; wc < /tmp/log
+    ```
+
+    上面的 pipe command 等价于先将 echo 的结果保存在临时的 log 文件中, 然后再调用 wc 统计字符
+
+    但是如果使用 redirect 实现相同功能, 在完成调用后, 还需要进一步将临时文件清理掉; 此外临时文件是具有大小限制的, 反正肯定受到磁盘本身大小的限制；而最难接受的是, redirect 完全将 pipe 分为了两个阶段, 考虑 pipe 嵌套的情况, redirect 还会进一步进行拆分, 使得每个阶段是相互独立, 前一个阶段必须完成后, 才能执行后一个阶段, 从整个程序的运行角度考虑, 并发性能很差
+
+*   xv6
 
 ### sleep
 
