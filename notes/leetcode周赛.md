@@ -9256,5 +9256,197 @@ class Solution {
 
 >   线段树也不是不行 ...
 
+# [第 392 场周赛](https://leetcode.cn/contest/weekly-contest-392/)
+
+>   贪心题给哥们恶心坏了
+
+## [100264. 最长的严格递增或递减子数组 (Longest Strictly Increasing or Strictly Decreasing Subarray)](https://leetcode.cn/classic/problems/longest-strictly-increasing-or-strictly-decreasing-subarray/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/longest-strictly-increasing-or-strictly-decreasing-subarray/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/07/16:08:07:100264.png" />
+	</a>
+</div>
+>   第一看看差了, 当成 LIS 问题了, 栈都写好了, 跑了之后才发现是子数组
+
+因为输入范围太小了, 直接爆搜
+
+```java
+class Solution {
+    public int longestMonotonicSubarray(int[] nums) {
+        int rst = 0;
+        int n = nums.length;
+        for (int i = 0; i < n; i ++) {
+            int j = i + 1;
+            while (j < n && nums[j] > nums[j - 1]) j ++;
+            rst = Math.max(rst, j - i);
+            j = i + 1;
+            while (j < n && nums[j] < nums[j - 1]) j ++;
+            rst = Math.max(rst, j - i);
+        }
+        return rst;
+    }
+}
+```
+
+如果输入范围继续增大的话, 就 dp 了
+
+```java
+class Solution {
+    public int longestMonotonicSubarray(int[] nums) {
+        int n = nums.length;
+        int[] f = new int[n];
+        int[] g = new int[n];
+        Arrays.fill(f, 1);
+        Arrays.fill(g, 1);
+        
+        int rst = 1;
+        for (int i = 1; i < n; i ++) {
+            if (nums[i] > nums[i - 1]) {
+                f[i] += f[i - 1];
+                rst = Math.max(rst, f[i]);
+            }
+            
+            if (nums[i] < nums[i - 1]) {
+                g[i] += g[i - 1];
+                rst = Math.max(rst, g[i]);
+            }
+        }
+        return rst;
+    }
+}
+```
+
+>   O(n) 已经够小了
+
+
+## [100242. 满足距离约束且字典序最小的字符串 (Lexicographically Smallest String After Operations With Constraint)](https://leetcode.cn/classic/problems/lexicographically-smallest-string-after-operations-with-constraint/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/lexicographically-smallest-string-after-operations-with-constraint/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/07/16:01:14:100242.png" />
+	</a>
+</div>
+
+贪心模拟题, 因为需要字典序最小, 因此能用 k 就一定要猛猛用, 如果能将字符变为 'a' 那就是最理想的
+
+因为字符存在循环关系, 直接让字符减小之外, 还可以通过增大字符触发循环条件, 显然应该从这两个中选择一个开销更小的
+
+```java
+class Solution {
+    public String getSmallestString(String s, int k) {
+        int n = s.length();
+        char[] cs = s.toCharArray();
+        char[] rst = new char[n];
+        
+        for (int i = 0; i < n; i ++) {
+            if (k > 0) {
+                int idx = cs[i] - 'a';
+                int dis = Math.min(26 - idx, idx);
+                if (k >= dis) {
+                    rst[i] = 'a';
+                    k -= dis;
+                } else {
+                    rst[i] = (char)(cs[i] - k);
+                    k = 0;
+                }
+            } else rst[i] = cs[i];
+        }
+        
+        return new String(rst);
+    }
+}
+```
+
+
+## [3107. 使数组中位数等于 K 的最少操作数 (Minimum Operations to Make Median of Array Equal to K)](https://leetcode.cn/classic/problems/minimum-operations-to-make-median-of-array-equal-to-k/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-operations-to-make-median-of-array-equal-to-k/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/07/15:46:03:3107.png" />
+	</a>
+</div>
+
+因为是数组的中位数, 对于一个有序的数组而言, 中位数一定位于下标为 $\frac{n}{2}$ 的地方, 本题先不需要考虑其他的部分, 先排序
+
+原始位置的中位数可能偏大或偏小 (如果相等的话直接返回就行了), 从贪心的角度考虑, 需要将偏大的位置缩小为 k, 偏小的位置增大为 k
+
+因此如果偏大的话, 就需要从当前位置向前, 将所有大于 k 的位置缩小为 k; 而如果偏小的话, 就需要从当前位置向后, 将所有小于 k 的位置增大为 k
+
+```java
+class Solution {
+    public long minOperationsToMakeMedianK(int[] nums, int k) {
+        long rst = 0L;
+        Arrays.sort(nums);
+        int n = nums.length;
+        int m = n >> 1;
+        if (nums[m] > k) {
+            for (int i = m; i >= 0 && nums[i] > k; i --) rst += nums[i] - k;
+        } else {
+            for (int i = m; i < n && nums[i] < k; i ++) rst += k - nums[i];
+        }
+        
+        return rst;
+    }
+}
+```
+
+## [100244. 带权图里旅途的最小代价 (Minimum Cost Walk in Weighted Graph)](https://leetcode.cn/classic/problems/minimum-cost-walk-in-weighted-graph/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-cost-walk-in-weighted-graph/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/07/15:35:38:100244.png" />
+	</a>
+</div>
+
+与运算, 越算越小, 为了让开销最小, 应该尽可能走过更多的路径; 本题的设定中, 同一条路径可以经过多次, 这意味着在一个连通图中, 任意两个点之间的开销都可以使用连通图中多所有路径的与的值表示进而有 -> 一个连通图中任意两点之间的最小开销一定是固定的, 且等于连通图中所有路径的与
+
+都已经涉及到连通图了, 直接上并查集就行了, 每个并查集的开销使用根节点的统计, 各种查询操作也就被转化为找父节点
+
+```java
+class Solution {
+    private int[] p;
+    private int[] w;
+    
+    public int[] minimumCost(int n, int[][] edges, int[][] query) {
+        this.p = new int[n];
+        for (int i = 0; i < n; i ++) p[i] = i;
+        this.w = new int[n];
+        // 初始开销， 因为是与运算, 因此这里初始化为 0xffff_ffff
+        Arrays.fill(w, Integer.MAX_VALUE);
+        // 任意一条边即代表一个联通集的合并
+        for (int[] es : edges) union(es[0], es[1], es[2]);
+        int m = query.length;
+        
+        int[] rst = new int[m];
+        for (int i = 0; i < m; i ++) {
+            // 本题的大坑, 源和目的相同时, 需要将结果置为 0 (估计很多人 WA 就是在这个位置)
+            if (query[i][0] == query[i][1]) rst[i] = 0;
+            else {
+                int p1 = find(query[i][0]);
+                int p2 = find(query[i][1]);
+
+                if (p1 != p2) rst[i] = -1;
+                else rst[i] = w[p1];
+            }
+        }
+        return rst;
+    }
+    
+    private int find(int a) {
+        if (p[a] != a) p[a] = find(p[a]);
+        return p[a];
+    }
+    
+    private void union(int a, int b, int c) {
+        int pa = find(a);
+        int pb = find(b);
+        int val = w[pa] & w[pb] & c;
+        w[pa] = val;
+        p[pb] = pa;
+    }
+}
+```
+
 
 
