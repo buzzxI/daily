@@ -50,7 +50,7 @@
 
 *   xv6 也支持 pipe, xv6 原生提供了 syscall -> pipe, 其需要一个大小为 2 的 int 数组作为参数, 完成调用后 p[0] 用来从 pipe 中读取数据, p[1] 用来向 pipe 中写入数据 (类比 stdin 和 stdout, 这两个分别是 0 和 1)
 
-    在 unix 中使用 pipe 可以实现进程之间的通信, 借助 pipe 和 dup, 可以在不修改原程序的情况下, 让一个程序的输出作为另一个程序的输入 -> xv6 的 shell (xv6 支持 pipeline, [command a] | [command b] | [command c] | ... 具体原因在于其在进行 cmdline 解析的时候, 以左侧优先的原则, 同时支持解析 cmdline 的递归调用)
+    在 unix 中使用 pipe 可以实现进程之间的通信, 借助 pipe 和 dup, 可以在不修改原程序的情况下, 让一个程序的输出作为另一个程序的输入 -> xv6 的 shell (xv6 支持级联的 pipeline: [command a] | [command b] | [command c] | ... 具体原因在于其在进行 cmdline 解析的时候, 以左侧优先的原则, 同时支持解析 cmdline 的递归调用)
 
     从执行的结果上来看 pipe 在作用等价于临时文件
 
@@ -65,7 +65,22 @@
 
     但是如果使用 redirect 实现相同功能, 在完成调用后, 还需要进一步将临时文件清理掉; 此外临时文件是具有大小限制的, 反正肯定受到磁盘本身大小的限制；而最难接受的是, redirect 完全将 pipe 分为了两个阶段, 考虑 pipe 嵌套的情况, redirect 还会进一步进行拆分, 使得每个阶段是相互独立, 前一个阶段必须完成后, 才能执行后一个阶段, 从整个程序的运行角度考虑, 并发性能很差
 
-*   xv6
+*   xv6 直接通过绝对路径和相对路径定位文件, 提供了 syscall -> chdir 可以修改 current directory; 
+
+    文件名可能相同, 但 xv6 在底层是通过 inode 定位各个文件的, 每个 inode 可以有多个 file name, 在 xv6 中将其称为 link; 本质上, link 就是 directory 中的一个 entry, 可以粗略的将 directory 看成是一个 map, 以 file name 为 key, inode 为 value
+
+    在 xv6 中每个 inode 中保存了文件的 metadata: type (file/directory/device), length, location of file content on disk, number of links; xv6 可以通过 syscall -> fstat 获取 inode 的 metadata
+
+    由于 xv6 使用 inode 记录文件, 因此只有当 inode 被删除后, 文件才会被真正删除, 在 os 层面, 只有当 inode 的 link 数量为 0, 并且没有 file descriptor 指向该 inode, 才会将该 inode 删除
+
+    基于这个机制, 可以创建和进程生命周期相同的临时文件, 比如:
+
+    ```c 
+    fd = open("/tmp/xyz", O_CREATE|O_RDWR);
+    unlink("/tmp/xyz");
+    ```
+
+    文件 /tmp/xyz 被创建后, 返回了一个 file descriptor, 但马上就通过 syscall -> unlink 将对应 inode 的 link 置为 0, 这样, 只要当前进程将 file descriptor close 掉之后, 该文件就会自动被 os 删除, 对应的资源会被直接回收  
 
 ### sleep
 
