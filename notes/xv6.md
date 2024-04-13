@@ -447,65 +447,78 @@ $ find . b
 #include "kernel/stat.h"
 #include "user/user.h"
 #include "kernel/fs.h"
+#include "kernel/param.h"
 
-const static char* current_dir = ".";
-const static char* parent_dir = "..";
+#define stderr 2
+#define stdout 1
+#define MAXBUF 512 
 
-void find(char* path, char* pattern) {
-    int fd;
-    struct stat st;
-
-    if ((fd = open(path, 0)) < 0) {
-        fprintf(2, "find: cannot open %s\n", path);
-        return;
-    }
-
-    if (fstat(fd, &st) < 0) {
-        fprintf(2, "find: cannot stat %s\n", path);
-        close(fd);
-        return;
-    }
-
-    char buf[512];
-    strcpy(buf, path);
-    char* p = buf + strlen(buf);
-    switch (st.type) {
-        case T_FILE:
-            *p = 0;
-            while (p > buf && *p != '/') p--;
-            p++;
-            if (strcmp(p, pattern) == 0) printf("%s\n", path);
-            break;
-        case T_DIR:
-            *p++ = '/';
-            struct dirent de;
-            while (read(fd, &de, sizeof(de)) == sizeof(de)) {
-                // jump empty directory entry
-                if (de.inum == 0) continue;
-                // jump current directory and parent directory
-                if (strcmp(de.name, current_dir) == 0) continue;
-                if (strcmp(de.name, parent_dir) == 0) continue;
-                int len = strlen(de.name);
-                memmove(p, de.name, len);
-                p[len] = 0;
-                // recurse find in sub-dir
-                find(buf, pattern);
-            }
-            break;
-    }
-
-    close(fd);
-}
+char* find_routine(char* path, char* pattern, char* rst);
+void last_name(char* full_path, char* rst);
 
 int main(int argc, char** argv) {
     if (argc != 3) {
-        fprintf(2, "Usage: %s [path] [pattern]", argv[0]);
+        fprintf(stderr, "Usage: %s <path> <pattern>\n", argv[0]);
         exit(1);
     }
-    
-    find(argv[1], argv[2]);
-
+    char rst[MAXBUF];
+    find_routine(argv[1], argv[2], rst);
+    fprintf(stdout, "%s", rst);
     exit(0);
+}
+
+char* find_routine(char* path, char* pattern, char* rst) {
+    char buffer[MAXPATH], *p;
+    int fd;
+    struct dirent de;
+    struct stat st;
+    if ((fd = open(path, 0)) < 0) {
+        fprintf(stderr, "find: cannot open:%s\n", path);
+        return rst;
+    }
+
+    if (fstat(fd, &st) < 0) {
+        fprintf(stderr, "find: cannot stat %s\n", path);
+        close(fd);
+        return rst;
+    }
+    
+    switch (st.type)
+    {
+    case T_DEVICE:
+    case T_FILE:
+        last_name(path, buffer);
+        if (strcmp(buffer, pattern) == 0) {
+            strcpy(rst, path);
+            rst += strlen(path);
+            *rst = '\n';
+            rst ++;
+        }
+        break;
+    case T_DIR:
+        strcpy(buffer, path);
+        p = buffer + strlen(buffer);
+        *p++ = '/';
+        int i;
+        // pass parent and current directory
+        for (i = 0; i < 2; i++) read(fd, &de, sizeof(de));
+        while ((read(fd, &de, sizeof(de))) == sizeof(de)) {
+            if (de.inum == 0) continue;
+            strcpy(p, de.name);
+            rst = find_routine(buffer, pattern, rst);
+        }
+        break;
+    }
+    close(fd);
+    return rst;
+}
+
+// get file last name
+void last_name(char* full_path, char* rst) {
+    char* p = full_path + strlen(full_path);
+    while (*p != '/' && p >= full_path) p --;
+    p ++;
+    strcpy(rst, p);
 }
 ```
 
@@ -534,50 +547,89 @@ $ find . b | xargs grep hello
 
 在上面的目录结构下, xargs 会为查询到的三个文件 b 分别执行一次 grep hello
 
-xargs 本身也是 unix 中一个常用的工具, 因此这里的写法上和前面的 ls 保持一致
+在 xv6 的实现中, 允许 command 包含多行, xargs 在执行时会以每行输入单独作为参数, 执行一次 xargs 后的指令, 比如:
+
+```shell
+$ (echo 1 ; echo 2) | xargs -n 1 echo
+1
+2
+$
+```
+
+因此 xargs 的实现其实很简单, 不断从 stdin 中获取输入, 一行执行一次指令即可 
 
 ```c
 #include "kernel/types.h"
 #include "user/user.h"
 #include "kernel/param.h"
 
-void xargs(int argc, char** argv) {
-    char* args[MAXARG];
-    int idx = 0;
-    for (int i = 1; i < argc; i++, idx++) args[idx] = argv[i];
-    char buff[512];
-    int end = 0;
-    while (read(0, &buff[end], 1) == 1) {
-        if (buff[end] == '\n') {
-            buff[end] = 0;
-            args[idx] = buff;
-            args[idx + 1] = 0;
-            int pid;
-            if ((pid = fork()) == 0) {
-                exec(args[0], args);
-                // never reach
-                exit(0);
-            }
+#define stdin 0
+#define stdout 1
+#define stderr 2
+#define MAXBUF 8192
+
+int main(int argc, char** argv) {
+    char buff[MAXBUF];
+    char* args[MAXARG + 1];
+    int i = 0;
+    // 参数重排, 将 args[0] 由 xargs 写为真正的指令
+    for (; i < argc - 1; i++) args[i] = argv[i + 1];
+    args[i + 1] = 0;
+    int j = 0;
+    for (; read(stdin, &buff[j], 1); j++) {
+        if (buff[j] == '\n') {
+            // 读到换行, 将从 stdin 的一行写入
+            buff[j] = 0;
+            args[i] = buff;
+            if (fork() == 0) exec(args[0], args);
             else {
                 int status;
                 wait(&status);
+                j = -1;
             }
-            end = 0;
-        } else end++;
-    }    
-}
-
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        fprintf(2, "Usage: %s [command]\n", argv[0]);
-        exit(1);
+        }
     }
-    xargs(argc, argv);
     exit(0);
 }
 ```
 
 ## syscall
+
+os 需要提供的三个功能: multiplexing, isolation, interaction
+
+*   multiplex: 显然 os 能运行的进程数是要比硬件处理器核心数目要多的, os 上的各个进程通过时分复用运行, os 可以保证其上运行的进程在一段时间内都有机会运行
+*   isolation: os 上运行的进程应该是相互独立的, 如果两个程序在编写的时候本身不存在依赖关系, 那么其中一个进程出现 bug 导致程序崩溃不能影响另外一个进程的正常运行
+*   interaction: os 对各个进程进行隔离, 但不能完全阻断进程之间的通信, os 需要提供进程通信的机制, 在 xv6 的第一个 lab 中其实已经看到借助 pipe line 可以让多个进程相互协作完成复杂的功能 (prime)
+
+## abstract physical resource
+
+os 的一个主要作用是对物理硬件进行的抽象, 比如对于磁盘资源，os 向应用程序提供了接口 open, close, read, write; 这样应用程序在使用磁盘读写数据时, 完全不需要关心对应的数据在磁盘上的位置; 
+
+再比如, os 可以对应用程序进行透明切换, 应用程序自身不需要考虑是否占用的太长 CPU 时间, os 自动进行切换, 保存被切换掉的进程的快照 (上下文), 加载切换到的进程快照 (上下文)
+
+当程序可以通过 syscall exec 加载到内存中运行, os 负责对程序在内存中的位置进行映射, 进程本身不需要考虑在内存中的位置
+
+## user mode & supervisor mode
+
+os 需要提供 strong isolation, 以保证当应用程序出现错误时, os 本身和其他的应用程序不会崩溃, 因此 os 需要保证正在运行的进程无法直接修改 os 本身和其他应用程序的数据结构, 或者说, 引用程序无论如何都不应该索引到除了自身以外的其他程序
+
+RISC-V 处理器具有三种权限级: machine mode, supervisor mode, user mode; 默认刚刚开机时 CPU 出于 machine mode, 在完成了一系列初始化工作后, 进入 supervisor mode
+
+>   os 提供应用程序之间的 isolation 是一种思想, 为了达到这一目标, 从设计上不仅仅需要 os 本身支持, 还需要硬件上也提供相应的功能, 比如权限级 (异常级) 的设计
+
+在 supervisor mode 下, CPU 可以执行 privileged instruction, 比如使能/阻塞处理器中断, 读/写保存了页表的寄存器; 
+
+>   应用程序运行在 user mode 中, 如果存在恶意应用程序通过主动写入指令的方式, 试图在 user mode 下让 CPU 执行 privileged instruction, 此时 CPU 不但不会执行指令, 反倒会进入 privileged mode 后, 直接杀掉当前恶意程序
+
+对于那些只能执行 user-mode 指令的程序, 术语上称其运行在 user space 中; 而对于那些可以执行 privileged instruction 的程序, 术语上称其运行在 kernel space 中 
+
+>   在 kernel space 中运行的也就是 kernel 了 (不然为啥叫这个名字)
+
+user mode 下的指令实在太有限了, 就是一些计算指令, 连存储都没有, 想要体验更多的功能, 必须执行 privileged instruction, 而根据上面所说, application 本身是无法执行 privileged instruction 的
+
+为此, RISC-V 提供了一种特殊的指令 ecall, 用来从 user mode 进入 supervisor mode; 为了区分 user application 实际的需求, ecall 也是包含参数的表示当前需要执行的功能 (保存在寄存器 a7 中) 和执行功能需要的参数 (保存在 trampoline 中)
+
+CPU 进入 supervior mode 之后, 控制权交给 kernel, kernel 可以通过读取寄存器 a7 获取 user application 需要执行的功能, 并对参数进行校验
 
 ### xv6 trap
 
