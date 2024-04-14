@@ -9448,5 +9448,451 @@ class Solution {
 }
 ```
 
+# [第 128 场双周赛](https://leetcode.cn/contest/biweekly-contest-128/)
 
+## [100270. 字符串的分数 (Score of a String)](https://leetcode.cn/classic/problems/score-of-a-string/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/score-of-a-string/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/17:36:05:100270.png" />
+	</a>
+</div>
+模拟签到题 ...
+
+```java
+class Solution {
+    public int scoreOfString(String s) {
+        int n = s.length();
+        char[] cs = s.toCharArray();
+        int rst = 0;
+        for (int i = 1; i < n; i ++) rst += Math.abs(cs[i] - cs[i - 1]);
+        return rst;
+    }
+}
+```
+
+
+## [100280. 覆盖所有点的最少矩形数目 (Minimum Rectangles to Cover Points)](https://leetcode.cn/classic/problems/minimum-rectangles-to-cover-points/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-rectangles-to-cover-points/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/17:33:04:100280.png" />
+	</a>
+</div>
+
+本题的 y 是没有用的, 直接对 x 排序就好了, 贪心的计算窗口个数
+
+```java
+class Solution {
+    public int minRectanglesToCoverPoints(int[][] ps, int w) {
+        Arrays.sort(ps, (p1, p2) -> p1[0] - p2[0]);
+        int rst = 0;
+        int end = -1;
+        int n = ps.length;
+        for (int i = 0; i < n; i ++) {
+            if (end < ps[i][0]) {
+                rst ++;
+                end = ps[i][0] + w;
+            }
+        }
+        return rst;
+    }
+}
+```
+
+## [3112. 访问消失节点的最少时间 (Minimum Time to Visit Disappearing Nodes)](https://leetcode.cn/classic/problems/minimum-time-to-visit-disappearing-nodes/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-time-to-visit-disappearing-nodes/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/17:28:30:3112.png" />
+	</a>
+</div>
+
+本题的设定中, 节点可能消失, 所以本质上还是使用 dijkstra, 只不过还需要在记录的时候再判断一下而已
+
+```java
+class Solution {
+    private static final int INF = 0x3f3f3f3f;
+    private int[] h;
+    private int[] e;
+    private int[] ne;
+    private int idx;
+    private int[] w;
+    public int[] minimumTime(int n, int[][] edges, int[] disp) {
+        this.h = new int[n];
+        Arrays.fill(h, -1);
+        int m = edges.length;
+        this.e = new int[m << 1];
+        this.ne = new int[m << 1];
+        this.idx = 0;
+        this.w = new int[m << 1];
+        for (int[] es : edges) {
+            add(es[0], es[1], es[2]);
+            add(es[1], es[0], es[2]);
+        }
+        
+        Queue<int[]> q = new PriorityQueue<>((n1, n2) -> n1[1] - n2[1]);
+        int[] rst = new int[n];
+        Arrays.fill(rst, INF);
+        rst[0] = 0;
+        q.offer(new int[]{0, 0});
+        while (!q.isEmpty()) {
+            int[] tmp = q.poll();
+            if (tmp[1] > rst[tmp[0]]) continue;
+            for (int i = h[tmp[0]]; i != -1; i = ne[i]) {
+                int j = e[i];
+                int cost = w[i] + rst[tmp[0]];
+                if (cost < rst[j] && cost < disp[j]) {
+                    rst[j] = cost;
+                    q.offer(new int[]{j, rst[j]});
+                }
+            }
+        }        
+        
+        for (int i = 0; i < n; i ++) {
+            if (rst[i] == INF) rst[i] = -1;
+        }
+        return rst;
+    }
+    
+    private void add(int a, int b, int c) {
+        e[idx] = b;
+        ne[idx] = h[a];
+        w[idx] = c;
+        h[a] = idx ++;
+    }
+}
+```
+
+
+## [100273. 边界元素是最大值的子数组数目 (Find the Number of Subarrays Where Boundary Elements Are Maximum)](https://leetcode.cn/classic/problems/find-the-number-of-subarrays-where-boundary-elements-are-maximum/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/find-the-number-of-subarrays-where-boundary-elements-are-maximum/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/16:42:28:100273.png" />
+	</a>
+</div>
+
+看到子数组的最大值, 想到可以使用单调栈, 找到以某个数字为最值的左右区间, 进一步看到本题要求子数组的左右边界相同:
+
+*   首先通过单调栈, 预处理每个位置为最大值的最左边界 l
+*   然后记录每个数字出现的位置, 保存在一个 Map\<Integer, List> 中
+*   遍历每个位置 i, 看一下其最左边界 l[i] 可以覆盖多少个相同的数字查询 map
+
+```java
+class Solution {
+    public long numberOfSubarrays(int[] nums) {
+        // 记录各个数字的位置
+        Map<Integer, List<Integer>> m = new HashMap<>();
+        int n = nums.length;
+        for (int i = 0; i < n; i ++) {
+            List<Integer> l = m.getOrDefault(nums[i], new ArrayList<>());
+            l.add(i);
+            m.put(nums[i], l);
+        }
+        
+        // 单调栈找左边界
+        int[] stk = new int[n];
+        int e = 0;
+        int[] l = new int[n];
+        for (int i = 0; i < n; i ++) {
+            while (e > 0 && nums[stk[e - 1]] <= nums[i]) e --;
+            if (e == 0) l[i] = 0;
+            else l[i] = stk[e - 1] + 1;
+            stk[e ++] = i;
+        }
+        
+        // 二分求个数
+        long rst = 0;
+        for (int i = 0; i < n; i ++) {
+            int min = l[i];
+            int max = i;
+            List<Integer> list = m.get(nums[i]);
+            int le = 0, r = list.size() - 1;
+            while (le < r) {
+                int mid = le + ((r - le) >> 1);
+                if (list.get(mid) < min) le = mid + 1;
+                else r = mid;
+            }
+            int ll = le;
+            le = 0;
+            r = list.size() - 1;
+            while (le < r) {
+                int mid = le + ((r - le + 1) >> 1);
+                if (list.get(mid) > max) r = mid - 1;
+                else le = mid;
+            }
+            rst += le - ll + 1;
+        }
+        
+        return rst;
+    }
+}
+```
+
+比赛只有发现了只需要一次遍历的写法, 还是单调递减的栈, 只不过栈中保存的不仅仅是数字本身, 还包括了当前数字出现的频率, 入栈时检查栈顶是否和当前数字是否相同, 如果相同说明当前数字只要有一个除了本身之外的子数组, 具体的个数取决于栈顶的频率
+
+```java
+class Solution {
+    public long numberOfSubarrays(int[] nums) {
+        long rst = 0;
+        Deque<int[]> stk = new ArrayDeque<>();
+        for (int num : nums) {
+            while (!stk.isEmpty()) {
+                int[] tmp = stk.peekLast();
+                if (tmp[0] >= num) break;
+                rst += tmp[1];
+                stk.pollLast();
+            }
+            if (!stk.isEmpty() && stk.peekLast()[0] == num) stk.offerLast(new int[]{num, 1 + stk.peekLast()[1]});
+            else stk.offerLast(new int[]{num, 1});
+        }
+
+        while (!stk.isEmpty()) rst += stk.pollLast()[1];
+        return rst;
+    }
+}
+```
+
+保存的频率表示以当前数字为结尾作为最大值的子数组的个数
+
+# [第 393 场周赛](https://leetcode.cn/contest/weekly-contest-393/)
+
+>   大寄
+
+## [100256. 替换字符可以得到的最晚时间 (Latest Time You Can Obtain After Replacing Characters)](https://leetcode.cn/classic/problems/latest-time-you-can-obtain-after-replacing-characters/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/latest-time-you-can-obtain-after-replacing-characters/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/16:29:44:100256.png" />
+	</a>
+</div>
+
+这种题, 模拟需要注意边界条件, 不如直接暴力枚举
+
+```java
+class Solution {
+    public String findLatestTime(String s) {
+        char[] cs = s.toCharArray();
+        for (int i = 11; i >= 0; i --) {
+            int div = i / 10;
+            int re = i % 10;
+            if (cs[0] - '0' == div || cs[0] == '?') {
+                if (cs[1] - '0' == re || cs[1] == '?') {
+                    cs[0] = (char)(div + '0');
+                    cs[1] = (char)(re + '0');
+                    break;
+                }
+            }
+        }
+        
+        for (int j = 59; j >= 0; j --) {
+            int div = j / 10;
+            int re = j % 10;
+            if (cs[3] - '0' == div || cs[3] == '?') {
+                if (cs[4] - '0' == re || cs[4] == '?') {
+                    cs[3] = (char)(div + '0');
+                    cs[4] = (char)(re + '0');
+                    break;
+                }
+            }
+        }
+        return new String(cs);
+    }
+}
+```
+
+>   比赛的时候喜提 + 10
+
+## [100265. 素数的最大距离 (Maximum Prime Difference)](https://leetcode.cn/classic/problems/maximum-prime-difference/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/maximum-prime-difference/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/16:27:04:100265.png" />
+	</a>
+</div>
+
+最大距离其实就是找第一个素数和最后一个素数 ...
+
+```java
+class Solution {
+    private static final int N = 110;
+    private static final Set<Integer> S = new HashSet<>();
+    // 欧拉筛预处理
+    static {
+        int[] vis = new int[N];
+        int[] P = new int[N];
+        int idx = 0;
+        for (int i = 2; i < N; i++) {
+            if (vis[i] == 0) P[idx++] = i;
+            for (int j = 0; j < idx && i * P[j] < N; j++) {
+                vis[i * P[j]] = 1;
+                if (i % P[j] == 0) break;
+            }
+        }
+        for (int i = 0; i < idx; i ++) S.add(P[i]);
+    }
+    public int maximumPrimeDifference(int[] nums) {
+        int l = -1;
+        for (int i = 0; i < nums.length; i ++) {
+            if (S.contains(nums[i])) {
+                l = i;
+                break;
+            }
+        }
+        int r = -1;
+        for (int i = nums.length - 1; i >= 0; i --) {
+            if (S.contains(nums[i])) {
+                r = i;
+                break;
+            }
+        }
+        return r - l;
+    }
+}
+```
+
+
+## [100267. 单面值组合的第 K 小金额 (Kth Smallest Amount With Single Denomination Combination)](https://leetcode.cn/classic/problems/kth-smallest-amount-with-single-denomination-combination/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/kth-smallest-amount-with-single-denomination-combination/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/15:51:21:100267.png" />
+	</a>
+</div>
+
+>   纯纯数学题
+
+本题的难点在于需要去重, 并且输入范围实在是太大了, $10^9$ 级别的输入, 注定了解法只能允许 $O(\log n)$ 的写法
+
+二分还是比较好想的, 二分结果, 同时调用 check 函数检查当前小于等于 mid 的方案数目和 k 的关系, 如果不需要去重, 那么按个作整除就行了
+
+考虑示例 2, 需要将所有 10 的倍数减去, 因为所有 10 的倍数会同时被 2 和 5 计算一次, 这里可能看到, 会导致重复出现的数字均为公倍数
+
+输入的 coins 数组大小最大为 15, 这意味着不仅仅需要考虑两个数字的公倍数, 甚至最多需要考虑 15 个数字的公倍数, 这就涉及到容斥原理了 ...
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/16:00:33:incexcp.png)
+
+这里需要求解的方案数, 对应了上图中三部分的并集, 通过朴素的整除计算的是将三个集合的大小相加了, 重复的部分即为各个集合的交集, 根据容斥原理, 偶数个集合的交集需要作减法, 而奇数个集合的交集需要作加法
+
+因此本题的 check 函数不仅仅需要计算单个数字的在 mid 下的个数, 还需要计算多个数字 (公倍数) 在 mid 下的个数
+
+```java
+class Solution {
+    private static final int INF = 0x3f3f3f3f;
+    public long findKthSmallest(int[] coins, int k) {
+        int min = INF;
+        for (int coin : coins) min = Math.min(min, coin);
+
+        long l = min;
+        long r = (long)min * k;
+
+        while (l < r) {
+            long m = l + ((r - l) >> 1);
+            long cnt = getCnt(coins, m);
+            if (cnt < k) l = m + 1;
+            else r = m;
+        }
+
+        return l;
+    }
+
+    long getCnt(int[] arr, long t) {
+        long rst = 0;
+
+        int n = arr.length;
+        // 枚举集合
+        for (int i = 1; i < (1 << n); i ++) {
+            long lcm_n = 1L;
+            // 计算最小公倍数
+            for (int j = i, k = 0; j > 0; j >>= 1, k ++) {
+                if ((j & 1) == 1) lcm_n = lcm(lcm_n, arr[k]);
+            }
+            long val = t / lcm_n;
+            // 通过 bit count 计算集合内元素个数
+            if ((Long.bitCount(i) & 1) == 1) rst += val;
+            else rst -= val;
+        }
+
+        return rst;
+    }
+
+    private long lcm(long a, long b) {
+        return a * b / gcd(a, b);
+    }
+
+    private long gcd(long a, long b) {
+        return b == 0 ? a : gcd(b, a % b);
+    }
+}
+```
+
+## [100259. 划分数组得到最小的值之和 (Minimum Sum of Values by Dividing Array)](https://leetcode.cn/classic/problems/minimum-sum-of-values-by-dividing-array/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-sum-of-values-by-dividing-array/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/16:11:21:100259.png" />
+	</a>
+</div>
+>   感觉比数学题还简单一些 ...
+
+对子数组进行划分, 感觉应该就是 dp, 定义状态 f(i, j, k) 表示前 i 个数字, 分割为 j 个子数组, 且当前 AND 为 k 时的最小开销
+
+记忆化搜索状态, 分割点为进行分割子数组/不分割子数组:
+
+*   不分割子数组: f(i, j, k) = f(i + 1, j, k & nums[i])
+*   分割子数组: f(i, j, k) = f(i + 1, j + 1, mask) 其中 mask 可以直接被写为 -1
+
+这里面 i 的个数取决于数组长度 $10^4$, j 的个数取决于字子数组的长度 $10$, mask 的个数仅为 $O(\log U)$ 级别
+
+>   这里面最反直觉的就是 mask 的个数居然这么小, 对于以 i 开头的子数组, 其 AND 值最多只能有 $O(\log U)$ 个, 对于一个 32 bit 的 int 类型, 也就是 32 种 mask
+>
+>   以为前面使用了 i 作为维度, 自然 mask 的个数也就少了, 但这里的问题在于, mask 是以掩码的方式保存, 这意味着有了 mask 作为参数, 就不能再使用 buff 数组保存状态了
+>
+>   一般而言, 这种状态都需要使用 map 保存, 甚至可能需要使用 String 作为 key ...
+>
+>   类似的情况, 还包括子数组下的 AND/OR 运算, GCD -> GCD 运算越运算越小, 每次减少至少减为之前的一半 ...
+>
+>   这类状态的特征是, 取值可能很大, 但是实际的状态个数比较少
+
+```java
+class Solution {
+    private static final int INF = 0x3f3f3f3f;
+    private static final int MAX_MASK = (1 << 24) - 1;
+    // long 保存状态
+    private Map<Long, Integer> buff;
+    private int[] nums;
+    private int[] andArr;
+    public int minimumValueSum(int[] nums, int[] andValues) {
+        this.buff = new HashMap<>();
+        this.nums = nums;
+        this.andArr = andValues;
+        int rst = dfs(0, 0, MAX_MASK);
+        return rst == INF ? -1 : rst;
+    }
+    
+    private int dfs(long i, long j, long and_) {
+        // 递归终点, 下标达到终点 i 或 j
+        if (i == nums.length) {
+            if (j == andArr.length) return 0;
+            return INF;
+        }
+        if (j == andArr.length) return INF;
+        // 高 32 bit 表示数组索引, 32 ~ 24 bit 表示子数组个数, 低 24 bit 表示 AND mask
+        long key = i << 32 | j << 24 | (and_ & MAX_MASK);
+        if (buff.containsKey(key)) return buff.get(key);
+        
+        and_ &= nums[(int)i];
+        // 剪枝, AND 运算越来越小
+        if (and_ < andArr[(int)j]) return INF;
+        
+        int rst = dfs(i + 1, j, and_);
+        // 分割子数组的要求是, 当前 and 的结果正好吻合 andArr 的要求
+        if (and_ == andArr[(int)j]) rst = Math.min(rst, dfs(i + 1, j + 1, MAX_MASK) + nums[(int)i]);
+        
+        buff.put(key, rst);
+        return rst;
+    }
+}
+```
 
