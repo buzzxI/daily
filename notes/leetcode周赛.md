@@ -9834,6 +9834,7 @@ class Solution {
 		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/14/16:11:21:100259.png" />
 	</a>
 </div>
+
 >   感觉比数学题还简单一些 ...
 
 对子数组进行划分, 感觉应该就是 dp, 定义状态 f(i, j, k) 表示前 i 个数字, 分割为 j 个子数组, 且当前 AND 为 k 时的最小开销
@@ -9892,6 +9893,305 @@ class Solution {
         
         buff.put(key, rst);
         return rst;
+    }
+}
+```
+
+# [第 394 场周赛](https://leetcode.cn/contest/weekly-contest-394/)
+
+## [100294. 统计特殊字母的数量 I (Count the Number of Special Characters I)](https://leetcode.cn/classic/problems/count-the-number-of-special-characters-i/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/count-the-number-of-special-characters-i/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/21/13:59:02:100294.png" />
+	</a>
+</div>
+```java
+class Solution {
+    public int numberOfSpecialChars(String word) {
+        int rst = 0;
+        int[] f1 = new int[26];
+        int[] f2 = new int[26];
+        Arrays.fill(f1, -1);
+        Arrays.fill(f2, -1);
+        int n = word.length();
+        char[] cs = word.toCharArray();
+        for (int i = 0; i < n; i ++) {
+            char c = cs[i];
+            if (c <= 'Z' && c >= 'A') f1[c - 'A'] = i;
+            else if (c <= 'z' && c >= 'a') f2[c - 'a'] = i;
+        }
+        
+        for (int i = 0; i < 26; i ++) {
+            if (f1[i] >= 0 && f2[i] >= 0) rst ++;
+        }
+        
+        
+        return rst;
+    }
+}
+```
+
+## [100291. 统计特殊字母的数量 II (Count the Number of Special Characters II)](https://leetcode.cn/classic/problems/count-the-number-of-special-characters-ii/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/count-the-number-of-special-characters-ii/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/21/13:56:19:100291.png" />
+	</a>
+</div>
+
+>   又是 byd 模拟题, 什么傻逼
+
+```java
+class Solution {
+    private static final int INF = 0x3f3f3f3f;
+    public int numberOfSpecialChars(String word) {
+        int rst = 0;
+        int[] f1 = new int[26];
+        int[] f2 = new int[26];
+        // f1 保存第一个大写字母的位置
+        Arrays.fill(f1, -1);
+        // f2 保存最后一个小写字母的位置
+        Arrays.fill(f2, INF);
+        int n = word.length();
+        char[] cs = word.toCharArray();
+        for (int i = 0; i < n; i ++) {
+            char c = cs[i];
+            if (c <= 'Z' && c >= 'A') {
+                int idx = c - 'A';
+                if (f1[idx] == -1) f1[idx] = i;
+            } else if (c <= 'z' && c >= 'a') {
+                int idx = c - 'a';
+                f2[idx] = i;
+            }
+        }
+        
+        for (int i = 0; i < 26; i ++) {
+            if (f2[i] < f1[i]) rst ++;
+        }
+        
+        return rst;
+    }
+}
+```
+
+
+## [100290. 使矩阵满足条件的最少操作次数 (Minimum Number of Operations to Satisfy Conditions)](https://leetcode.cn/classic/problems/minimum-number-of-operations-to-satisfy-conditions/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/minimum-number-of-operations-to-satisfy-conditions/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/21/13:47:47:100290.png" />
+	</a>
+</div>
+
+看了一下输入范围, 列数达到了 1000, 而数字本身只从 0 取到 9, 因此这里定义状态 f\[i][j] 表示第 i 列, 取值为 j 的最小开销
+
+首先遍历一次原矩阵, 得到数组 g\[i][j] 表示, 第 i 行, 取值为 j 需要的开销, 则状态转移 $f[i][j] = \min_{k\neq j} (f[i - 1][k]) + g[i][j]$​, 最终返回 $\min_{k = 0}^{9}(f[n - 1][k])$
+
+遍历原始矩阵的时间复杂度为: $O(m\times n)$，更新状态的时间开销为: $O(n\times10\times 10)$, 在本题的输入下, 时间复杂度为: $10^6$ 级别
+
+```java
+class Solution {
+    private static final int INF = 0x3f3f3f3f;
+    public int minimumOperations(int[][] grid) {
+        int n = grid.length;
+        int m = grid[0].length;
+        int[][] map = new int[m][10];
+        for (int i = 0; i < n; i ++) {
+            for (int j = 0; j < m; j ++) {
+                map[j][grid[i][j]] ++;
+            }
+        }
+        int[][] f = new int[m][10];
+        for (int j = 0; j < m; j ++) {
+            for (int k = 0; k < 10; k ++) f[j][k] = n - map[j][k];
+        }
+        int[][] g = new int[m][10];
+        for (int i = 0; i < 10; i ++) g[0][i] = f[0][i];
+        
+        for (int j = 1; j < m; j ++) {
+            for (int k = 0; k < 10; k ++) {
+                int pre = INF;
+                for (int q = 0; q < 10; q ++) {
+                    if (q == k) continue;
+                    pre = Math.min(pre, g[j - 1][q]);
+                }
+                g[j][k] = f[j][k] + pre;
+            }
+        }
+        
+        int rst = INF;
+        for (int i = 0; i < 10; i ++) rst = Math.min(rst, g[m - 1][i]);
+        
+        return rst;
+    }
+}
+```
+
+>   代码中的变量定义和上面说的状态对不上, 反正意思是一致的
+
+## [100276. 最短路径中的边 (Find Edges in Shortest Paths)](https://leetcode.cn/classic/problems/find-edges-in-shortest-paths/description/)
+
+<div style="text-align:center;">
+	<a href="https://leetcode.cn/classic/problems/find-edges-in-shortest-paths/description/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/04/21/13:36:32:100276.png" />
+	</a>
+</div>
+
+比赛的时候分为两个阶段求解, 首先通过 dijkstra 求解每个节点的最短路开销, 然后再用一次 dfs 进行路径标记
+
+```java
+class Solution {
+    private static final int INF = 0x3f3f3f3f;
+    private int[] h;
+    private int[] e;
+    private int[] ne;
+    private int idx;
+    private int[] w;
+    private int[] map;
+    private int[] dist;
+    private boolean[] rst;
+    private int t;
+    public boolean[] findAnswer(int n, int[][] edges) {
+        this.h = new int[n];
+        Arrays.fill(h, -1);
+        int m = edges.length;
+        this.e = new int[m << 1];
+        this.ne = new int[m << 1];
+        this.w = new int[m << 1];
+        this.map = new int[m << 1];
+        this.idx = 0;
+        // 建图, 保存 e 和原始 edges 的映射关系
+        for (int i = 0; i < m; i ++) {
+            add(edges[i][0], edges[i][1], edges[i][2], i);
+            add(edges[i][1], edges[i][0], edges[i][2], i);
+        }
+        
+        // dijkstra 求解最短路
+        this.dist = new int[n];
+        Arrays.fill(dist, INF);
+        Queue<int[]> q = new PriorityQueue<>((a1, a2) -> a1[1] - a2[1]);
+        dist[0] = 0;
+        q.offer(new int[]{0, 0});
+        while (!q.isEmpty()) {
+            int[] tmp = q.poll();
+            if (tmp[1] <= dist[tmp[0]]) {
+                for (int i = h[tmp[0]]; i != -1; i = ne[i]) {
+                    int j = e[i];
+                    if (tmp[1] + w[i] <= dist[j]) {
+                        dist[j] = tmp[1] + w[i];
+                        q.offer(new int[]{j, dist[j]});
+                    }
+                }
+            } 
+        }
+        
+        this.rst = new boolean[m];
+        if (dist[n - 1] == INF) return rst;
+        this.t = n - 1;
+        dfs(0, new ArrayDeque<>());
+        return rst;
+    }
+    
+    private void dfs(int node, Deque<Integer> path) {
+        if (node == t) {
+            // 路径标记
+            Deque<Integer> tmp = new ArrayDeque<>(path);
+            while (!tmp.isEmpty()) rst[map[tmp.pollFirst()]] = true;
+        }
+        
+        for (int i = h[node]; i != -1; i = ne[i]) {
+            int j = e[i];
+            if (dist[node] + w[i] > dist[j]) continue;
+            // 记录路径
+            path.offerLast(i);
+            dfs(j, path);
+            path.pollLast();
+        }
+    }
+    
+    private void add(int a, int b, int c, int d) {
+        e[idx] = b;
+        ne[idx] = h[a];
+        w[idx] = c;
+        map[idx] = d;
+        h[a] = idx ++;
+    }
+}
+```
+
+而实际上, 如果采用反向搜索的方式, 那么甚至都不需要使用额外的 path 保存路径
+
+```java
+class Solution {
+    private static final int INF = 0x3f3f3f3f;
+    private int[] h;
+    private int[] e;
+    private int[] ne;
+    private int idx;
+    private int[] w;
+    private int[] map;
+    private int[] dist;
+    private boolean[] rst;
+    public boolean[] findAnswer(int n, int[][] edges) {
+        this.h = new int[n];
+        Arrays.fill(h, -1);
+        int m = edges.length;
+        this.e = new int[m << 1];
+        this.ne = new int[m << 1];
+        this.w = new int[m << 1];
+        this.map = new int[m << 1];
+        this.idx = 0;
+        for (int i = 0; i < m; i ++) {
+            add(edges[i][0], edges[i][1], edges[i][2], i);
+            add(edges[i][1], edges[i][0], edges[i][2], i);
+        }
+        
+        this.dist = new int[n];
+        Arrays.fill(dist, INF);
+        
+        Queue<int[]> q = new PriorityQueue<>((a1, a2) -> a1[1] - a2[1]);
+        dist[0] = 0;
+        
+        q.offer(new int[]{0, 0});
+        while (!q.isEmpty()) {
+            int[] tmp = q.poll();
+            if (tmp[1] <= dist[tmp[0]]) {
+                for (int i = h[tmp[0]]; i != -1; i = ne[i]) {
+                    int j = e[i];
+                    if (tmp[1] + w[i] <= dist[j]) {
+                        dist[j] = tmp[1] + w[i];
+                        q.offer(new int[]{j, dist[j]});
+                    }
+                }
+            } 
+        }
+        
+        this.rst = new boolean[m];
+        if (dist[n - 1] == INF) return rst;
+        dfs(n - 1);
+        return rst;
+    }
+    
+    private void dfs(int node) {
+        if (node == 0) return;
+        
+        // 反向搜索, 从 n - 1 开始, 只要遇到的边, 相加正好等于当前节点的开销, 说明该路径为最短路
+        for (int i = h[node]; i != -1; i = ne[i]) {
+            int j = e[i];
+            if (dist[node] == dist[j] + w[i]) {
+                rst[map[i]] = true;
+                dfs(j);
+            }
+        }
+    }
+    
+    private void add(int a, int b, int c, int d) {
+        e[idx] = b;
+        ne[idx] = h[a];
+        w[idx] = c;
+        map[idx] = d;
+        h[a] = idx ++;
     }
 }
 ```

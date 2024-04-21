@@ -2557,3 +2557,312 @@ spring 官方给出的例子是比较简化的: [Getting Started | Creating Asyn
 
 
 
+# micro-service
+
+目前也只有 boj 有这种需求了, 目前的策略比较简单, 采用 dubbo 进行 RPC 调用, nacos 作为服务注册中心
+
+## quick start
+
+官方教程写的很好了, 默认的服务注册中心是 zookeeper, 这里直接等价更换为 nacos
+
+整体上构建了将示例项目 dubbo-spring 差分为三个模块:
+
+*   dubbo-spring-provider: 服务端, 实现都写在这里面
+*   dubbo-spring-consumer: 消费端, 执行 RPC 调用
+*   dubbo-spring-interface: 共享 API
+
+首先需要构建父子 pom 项目, 这里也算是经典的 pom 文件写法, 对于父 pom 而言, 其不包含任何的源码, 因此采用 pom 的方式进行打包
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>icu.buzz</groupId>
+    <artifactId>dubbo-spring</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>dubbo-spring</name>
+    <description>dubbo-spring</description>
+
+    <modules>
+        <module>dubbo-spring-interface</module>
+        <module>dubbo-spring-consumer</module>
+        <module>dubbo-spring-provider</module>
+    </modules>
+    <!--pack current project as parent pom-->
+    <packaging>pom</packaging>
+
+    <properties>
+        <java.version>17</java.version>
+        <spring-boot.version>3.2.4</spring-boot.version>
+        <dubbo.version>3.2.0-beta.4</dubbo.version>
+        <nacos.version>2.3.2</nacos.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
+        <project.source.encoding>UTF-8</project.source.encoding>
+    </properties>
+
+    <!--this label just list the dependency-->
+    <dependencyManagement>
+        <dependencies>
+            <!--spring boot dependency-->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <!--import a pom dependency into current pom file-->
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!--dubbo dependency-->
+            <dependency>
+                <groupId>org.apache.dubbo</groupId>
+                <artifactId>dubbo-bom</artifactId>
+                <version>${dubbo.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alibaba.nacos</groupId>
+                <artifactId>nacos-client</artifactId>
+                <version>${nacos.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+
+    <build>
+        <!--just like dependencies and dependencyManagement-->
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
+</project>
+```
+
+注意到对于父 pom 而言, 不存在实际的依赖关系, 因此只是在 dependencyManagement 中进行声明, 这里声明了 spring-boot 的依赖, dubbo 和 nacos 的依赖
+
+>   注意到 dubbo 和 nacos 的结合示例中应该还有一项:
+>
+>   ```xml
+>   <dependency>
+>       <groupId>com.alibaba</groupId>
+>       <artifactId>dubbo-registry-nacos</artifactId>
+>   </dependency>
+>   ```
+>
+>   这个其实是不需要的, 因为在 dubbo-bom 中已经包含这个依赖了
+
+在构建父子项目的时候, 父项目不需要使用 spring initializer 构建, 直接裸生成一个 maven project 即可, 类似的, 因为 interface 中也不包含任何的启动类, 也是可以直接使用 maven 项目构建
+
+对于 interface 而言, 其 pom 如下:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>icu.buzz</groupId>
+        <artifactId>dubbo-spring</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>dubbo-spring-interface</artifactId>
+    <name>dubbo-spring-interface</name>
+    <description>dubbo-spring-interface</description>
+
+</project>
+```
+
+注意到因为 pom 本身仅仅是 API 的声明, 本身不需要其他的依赖, 但是要明确 artifactId
+
+provider 端和 consumer 端的 pom 文件是类似的, 在官方示例中完全一致, 这里对于 consumer 端通过暴露 api 的方式接受调用, 因此 consumer 还额外多了一个 spring-boot-web-starter 的依赖
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>icu.buzz</groupId>
+        <artifactId>dubbo-spring</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>dubbo-spring-consumer</artifactId>
+    <name>dubbo-spring-consumer</name>
+    <description>dubbo-spring-consumer</description>
+    <version>${project.parent.version}</version>
+
+    <dependencies>
+        <!--dependency for interface-->
+        <dependency>
+            <groupId>icu.buzz</groupId>
+            <artifactId>dubbo-spring-interface</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+
+        <!--dubbo-->
+        <dependency>
+            <groupId>org.apache.dubbo</groupId>
+            <artifactId>dubbo-spring-boot-starter</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.nacos</groupId>
+            <artifactId>nacos-client</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.dubbo</groupId>
+            <artifactId>dubbo-registry-nacos</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+		
+        <!--reserve for consumer only-->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
+```
+
+注意到依赖中包含了对 interface 的依赖, 这是为了 consumer 和 provider 可以识别到在 interface 中定义的服务
+
+然后就是修改 yaml 文件, 主要就是 dubbo 向服务注册中心的配置, 因为这里采用 nacos 作为服务注册中心, 因此这里也等价修改了
+
+```yaml
+# dubbo-spring-provider
+dubbo:
+  application:
+    name: dubbo-spring-provider
+  protocol:
+    name: dubbo
+    port: -1
+  registry:
+    address: nacos://127.0.0.1:8848
+```
+
+>   consumer 除了 application name 不同之外剩下的都一样, 就不复制一份了
+
+然后就是声明服务, 在 interface 下创建 SimpleService 接口, 用来抽象基本的服务
+
+```java
+// module dubbo-spring-interface
+
+package icu.buzz.dubbo.spring.service;
+
+public interface SimpleService {
+    String sayHello(String name);
+}
+```
+
+具体的实现放在另外的 provider 所在的 module 中
+
+```java
+// module dubbo-spring-provider
+
+package icu.buzz.dubbo.spring.provider.service;
+
+import icu.buzz.dubbo.spring.service.SimpleService;
+import org.apache.dubbo.config.annotation.DubboService;
+
+@DubboService
+public class SimpleServiceImpl implements SimpleService {
+    @Override
+    public String sayHello(String name) {
+        return "Hello, " + name;
+    }
+}
+```
+
+>   注意这里使用声明 bean 的区别, 这里使用的是 @DubboService 而不是 @Service
+
+在 client 端执行 RPC 调用, 首先需要注入 bean, 官方的用法是使用注解 @DubboReference, 查看源码发现其最佳使用方式是放在一个 config 配置类中
+
+```java
+// module dubbo-spring-consumer
+
+package icu.buzz.dubbo.spring.consumer.config;
+
+import icu.buzz.dubbo.spring.service.SimpleService;
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.apache.dubbo.config.spring.ReferenceBean;
+import org.apache.dubbo.config.spring.context.annotation.EnableDubbo;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+@EnableDubbo
+public class DubboConfig {
+
+    @Bean
+    @DubboReference(interfaceClass = SimpleService.class)
+    public ReferenceBean<SimpleService> simpleService() {
+        return new ReferenceBean<>();
+    }
+}
+
+```
+
+这样在 spring container 中就会存在一个类型为 SimpleService 的 bean 了, 后续在 spring 的依赖配置类中可以通过 @Autowire 的方式完成 bean 的注入
+
+>   注意到这里一定需要使用注解 @EnableDubbo 用来使能 dubbo, 在 server 端就将这个注解放在了启动类上
+
+然后就是执行调用了
+
+```java
+// module dubbo-spring-consumer
+
+package icu.buzz.dubbo.spring.consumer.controller;
+
+import icu.buzz.dubbo.spring.service.SimpleService;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class SimpleController {
+    private final SimpleService simpleService;
+
+    public SimpleController(SimpleService simpleService) {
+        this.simpleService = simpleService;
+    }
+
+    @PostMapping("/sayHello")
+    public String sayHello(@RequestBody String name) {
+        return simpleService.sayHello(name);
+    }
+}
+```
+
+反正在使用的时候, 和一般的 service bean 没有什么区别
+
