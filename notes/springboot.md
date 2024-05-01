@@ -6264,7 +6264,7 @@ management:
 
 通过代码的形式，调用远程的接口。
 
-通常可以通过RestTemplateBuilder构造RestTemplate。
+通常可以通过 RestTemplateBuilder 构造 RestTemplate。
 
 它的一些方法：
 

@@ -2563,7 +2563,9 @@ spring 官方给出的例子是比较简化的: [Getting Started | Creating Asyn
 
 ## quick start
 
-官方教程写的很好了, 默认的服务注册中心是 zookeeper, 这里直接等价更换为 nacos
+官方教程写的很好了, 默认的服务注册中心是 zookeeper, ~~这里直接等价更换为 nacos~~
+
+>   nacos 有点垃圾吧, 对 springboot 3.x 的兼容性存在问题这里索性还是用 zookeeper 吧
 
 整体上构建了将示例项目 dubbo-spring 差分为三个模块:
 
@@ -2626,9 +2628,9 @@ spring 官方给出的例子是比较简化的: [Getting Started | Creating Asyn
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.nacos</groupId>
-                <artifactId>nacos-client</artifactId>
-                <version>${nacos.version}</version>
+                <groupId>org.apache.dubbo</groupId>
+                <artifactId>dubbo-zookeeper-curator5-spring-boot-starter</artifactId>
+                <version>${dubbo.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -2649,18 +2651,7 @@ spring 官方给出的例子是比较简化的: [Getting Started | Creating Asyn
 </project>
 ```
 
-注意到对于父 pom 而言, 不存在实际的依赖关系, 因此只是在 dependencyManagement 中进行声明, 这里声明了 spring-boot 的依赖, dubbo 和 nacos 的依赖
-
->   注意到 dubbo 和 nacos 的结合示例中应该还有一项:
->
->   ```xml
->   <dependency>
->       <groupId>com.alibaba</groupId>
->       <artifactId>dubbo-registry-nacos</artifactId>
->   </dependency>
->   ```
->
->   这个其实是不需要的, 因为在 dubbo-bom 中已经包含这个依赖了
+注意到对于父 pom 而言, 不存在实际的依赖关系, 因此只是在 dependencyManagement 中进行声明, 这里声明了 spring-boot 的依赖, dubbo 和 zookeeper 的依赖
 
 在构建父子项目的时候, 父项目不需要使用 spring initializer 构建, 直接裸生成一个 maven project 即可, 类似的, 因为 interface 中也不包含任何的启动类, 也是可以直接使用 maven 项目构建
 
@@ -2722,13 +2713,8 @@ provider 端和 consumer 端的 pom 文件是类似的, 在官方示例中完全
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.nacos</groupId>
-            <artifactId>nacos-client</artifactId>
-        </dependency>
-
-        <dependency>
             <groupId>org.apache.dubbo</groupId>
-            <artifactId>dubbo-registry-nacos</artifactId>
+            <artifactId>dubbo-zookeeper-curator5-spring-boot-starter</artifactId>
         </dependency>
 
         <dependency>
@@ -2768,7 +2754,9 @@ dubbo:
     name: dubbo
     port: -1
   registry:
-    address: nacos://127.0.0.1:8848
+    address: zookeeper://localhost:2181
+    # 官方建议是使用 instance 级别的服务发现
+    register-mode: instance
 ```
 
 >   consumer 除了 application name 不同之外剩下的都一样, 就不复制一份了
@@ -2833,7 +2821,7 @@ public class DubboConfig {
 
 ```
 
-这样在 spring container 中就会存在一个类型为 SimpleService 的 bean 了, 后续在 spring 的依赖配置类中可以通过 @Autowire 的方式完成 bean 的注入
+这样在 spring container 中就会存在一个类型为 SimpleService 的 bean 了, 后续在 spring 的依赖配置类中可以通过 @Autowired 的方式完成 bean 的注入
 
 >   注意到这里一定需要使用注解 @EnableDubbo 用来使能 dubbo, 在 server 端就将这个注解放在了启动类上
 
