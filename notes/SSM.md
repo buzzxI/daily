@@ -1313,7 +1313,7 @@ CREATE TABLE `blog`(
 ```xml
 <select id="getBlogs" parameterType="java.util.Map" resultType="com.buzz.pojo.Blog">
     select * from blog where 1=1
-    <if test="tiltle != null">
+    <if test="title != null">
         and title like #{title}
     </if>
     <if test="author != null">

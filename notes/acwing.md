@@ -3188,6 +3188,7 @@ int main() {
 		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/01/22/22:08:03:acwing_1020.png" />
 	</a>
 </div>
+
 本题与众不同的一点在于, f\[i][j] 表示在氧气含量不少于 i 氮气含量不少于 j 的最小重量 (对比一般的二维背包 f\[i][j] 表示氧气不超过 i, 氮气不超过 j 的最小重量)
 
 因此在考虑状态转移的时候, 下边界应该取到 0
@@ -3218,6 +3219,256 @@ int main() {
     
     printf("%d\n", f[m][n]);
     return 0;
+}
+```
+
+### 分组背包
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/9/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/05/21/19:21:20:acwing_9.png" />
+	</a>
+</div>
+
+将整个组看成一个物品, 定义状态 f\[i][j] 表示前 i 组物品中, 体积不超过 j 的选取方案得到的最大价值
+
+由于需要将一组物品看成一个物品, 因此在内层循环中还应该再嵌套一层, 表示当前组中选择的物品
+
+```java
+import java.io.*;
+
+class Main {
+    private static BufferedReader ins = new BufferedReader(new InputStreamReader(System.in));
+    private static StreamTokenizer in = new StreamTokenizer(ins);
+    private static PrintWriter out = new PrintWriter(System.out);
+    
+    public static void main(String[] args) throws IOException {
+        int n, v;
+        in.nextToken();
+        n = (int)in.nval;
+        in.nextToken();
+        v = (int)in.nval;
+        
+        int[][] f = new int[n + 1][v + 1];
+        
+        for (int i = 1; i <= n; i ++) {
+            int s;
+            in.nextToken();
+            s = (int)in.nval;
+            int[] vs = new int[s];
+            int[] ws = new int[s];
+            for (int j = 0; j < s; j ++) {
+                in.nextToken();
+                vs[j] = (int)in.nval;
+                in.nextToken();
+                ws[j] = (int)in.nval;
+            }
+            
+            for (int j = 0; j <= v; j ++) {
+                f[i][j] = f[i - 1][j];
+                // 枚举当前分组中选择的物品
+                for (int k = 0; k < s; k ++) {
+                    if (j >= vs[k]) f[i][j] = Math.max(f[i][j], f[i - 1][j - vs[k]] + ws[k]);
+                }
+            }
+        }
+        
+        out.println(f[n][v]);
+        out.close();
+    }
+}
+```
+
+因为每个组选择一个元素, 其实有点类似 01 背包, 因此可以选择类似 01 背包的优化方式
+
+```java
+import java.io.*;
+
+class Main {
+    private static BufferedReader ins = new BufferedReader(new InputStreamReader(System.in));
+    private static StreamTokenizer in = new StreamTokenizer(ins);
+    private static PrintWriter out = new PrintWriter(System.out);
+    
+    public static void main(String[] args) throws IOException {
+        int n, v;
+        in.nextToken();
+        n = (int)in.nval;
+        in.nextToken();
+        v = (int)in.nval;
+        
+        int[] f = new int[v + 1];
+        
+        for (int i = 0; i < n; i ++) {
+            int s;
+            in.nextToken();
+            s = (int)in.nval;
+            int[] vs = new int[s];
+            int[] ws = new int[s];
+            for (int j = 0; j < s; j ++) {
+                in.nextToken();
+                vs[j] = (int)in.nval;
+                in.nextToken();
+                ws[j] = (int)in.nval;
+            }
+            
+            for (int j = v; j >= 0; j --) {
+                for (int k = 0; k < s; k ++) {
+                    if (j >= vs[k]) f[j] = Math.max(f[j], f[j - vs[k]] + ws[k]);
+                }
+            }
+        }
+        
+        out.println(f[v]);
+        out.close();
+    }
+}
+```
+
+>   和 01 背包不同的是, 分组背包的内层循环终点需要遍历到 0 (或者分组中所有物品的最小值)
+
+### 难背包
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/description/10/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/05/21/20:50:10:acwing_10.png" />
+	</a>
+</div>
+
+>   看不出如何将这个问题转化为分组背包问题
+
+定义状态 f\[i][j] 表示以 i 为根节点的子树中, 物品体积不超过 j 的最大价值, 状态转移时, 枚举给每个子树的使用的体积
+
+```java
+import java.io.*;
+import java.util.*;
+
+class Main {
+    private static BufferedReader ins = new BufferedReader(new InputStreamReader(System.in));
+    private static StreamTokenizer in = new StreamTokenizer(ins);
+    private static PrintWriter out = new PrintWriter(System.out);
+    private static int[] h, e, ne;
+    private static int idx;
+    private static int n, v;
+    private static int[] vs, ws;
+    private static int[][] f;
+    
+    public static void main(String[] args) throws IOException {
+        in.nextToken();
+        n = (int)in.nval;
+        in.nextToken();
+        v = (int)in.nval;
+        
+        h = new int[n + 1];
+        Arrays.fill(h, -1);
+        e = new int[n];
+        ne = new int[n];
+        idx = 0;
+        
+        vs = new int[n + 1];
+        ws = new int[n + 1];
+        
+        int root = 0;
+        
+        for (int i = 1; i <= n; i ++) {
+            in.nextToken();
+            vs[i] = (int)in.nval;
+            in.nextToken();
+            ws[i] = (int)in.nval;
+            in.nextToken();
+            int p = (int)in.nval;
+            if (p == -1) root = i;
+            // 单向边建图
+            else add(p, i);
+        }
+        
+        f = new int[n + 1][v + 1];
+        
+        dfs(root);
+        
+        out.println(f[root][v]);
+        out.close();
+    }
+    
+    private static void dfs(int root) {
+        // 题目要求, 必须包含当前节点, 因此默认 f[root][vs[root] ~ v] 被初始化为当前节点的价值
+        for (int i = vs[root]; i <= v; i ++) f[root][i] = ws[root];
+        
+        for (int i = h[root]; i != -1; i = ne[i]) {
+            int j = e[i];
+            dfs(j);
+            // 枚举当前节点使用的体积, 不会小于当前物品的体积本身
+            for (int k = v; k >= vs[root]; k --) {
+                // 枚举当前子节点使用的体积, 由于当前节点必须选择, 因此体积不会超过 k - vs[i] (留给根节点使用)
+                for (int x = 0; x <= k - vs[root]; x ++) f[root][k] = Math.max(f[root][k], f[j][x] + f[root][k - x]);
+            }
+        }
+    }
+    
+    private static void add(int a, int b) {
+        e[idx] = b;
+        ne[idx] = h[a];
+        h[a] = idx ++;
+    }
+}
+```
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/description/1076/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/acwing_1074.png" />
+	</a>
+</div>
+和上一题类似, 上一题中的限制是节点的体积限制, 本题的限制是边数的限制, 定义状态 f\[i][j] 表示节点 i 所在子树中保留树枝数不超过 j 时可以保留的最多苹果数
+
+```cpp
+#include <iostream>
+#include <cstring>
+#include <algorithm>
+
+using namespace std;
+
+const int N = 110;
+
+int h[N], e[N << 1], ne[N << 1], w[N << 1], idx;
+
+int n, q;
+
+int f[N][N];
+
+void add(int a, int b, int c) {
+    e[idx] = b;
+    ne[idx] = h[a];
+    w[idx] = c;
+    h[a] = idx ++;
+}
+
+void dfs(int u, int fa) {
+    for (int i = h[u]; i != -1; i = ne[i]) {
+        int son = e[i];
+        if (son == fa) continue;
+        
+        dfs(son, u);
+        
+        for (int j = q; j > 0; j --) {
+            for (int k = 0; k < j; k ++) {
+                f[u][j] = max(f[u][j], f[son][k] + w[i] + f[u][j - k - 1]);
+            }
+        }
+    }
+}
+
+int main() {
+    scanf("%d%d", &n, &q);
+    memset(h, 0xff, sizeof h);
+    for (int i = 0; i < n - 1; i ++) {
+        int a, b, c;
+        scanf("%d%d%d", &a, &b, &c);
+        add(a, b, c);
+        add(b, a, c);
+    }
+    
+    dfs(1, -1);
+    
+    printf("%d", f[1][q]);
 }
 ```
 

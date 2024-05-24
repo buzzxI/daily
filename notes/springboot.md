@@ -4036,7 +4036,7 @@ public class DefaultFooService implements FooService {
 
 *   rollbackFor：表明当前事务在抛出了何种异常的情况下进行事务回滚
 
-    >   默认的话 spring 针对所有 unchecked exception 进行回滚(即所有 RuntimeException)
+    >   默认的话 spring 针对所有 unchecked exception 进行回滚 (即所有 RuntimeException)
 
 *   noRollbackFor：回滚白名单
 
