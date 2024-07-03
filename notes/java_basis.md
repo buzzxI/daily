@@ -157,7 +157,6 @@ public static native void arraycopy(Object src,  int  srcPos,
     }
     ```
 
-    
 
 # Maven
 
@@ -313,7 +312,7 @@ java 使用 Throwable 表示各种错误和异常, throwable 有两个重要的�
 
 * Exception: 这个才是异常, 各种异常又可以分为两类:
 
-    *   编译期异常: 就是那些只要不处理就不能编译通过的异常, 这些异常必须处理, 要么 try-catch 要么 throws 抛给上一个栈帧
+    *   编译期异常 (checked exception): 就是那些只要不处理就不能编译通过的异常, 这些异常必须处理, 要么 try-catch 要么 throws 抛给上一个栈帧
 
     *   RuntimeException (运行时异常, 包括所有继承了该类的异常): 这些异常编译器不会检查, 比如 NullPointerException (对象为 null), ArrayIndexOutOfBoundsException (数组越界)
 
@@ -323,7 +322,9 @@ java 使用 Throwable 表示各种错误和异常, throwable 有两个重要的�
 
 *   finally 块内的内容一定会被执行 (即便 catch 中包含了 return 语句)
 
-    >   执行到 catch 中的 return 后直接跳转到 finally 中执行, 如果 finally 包含了 return statment 就直接返回，否则回到 catch 中返回
+    >   执行到 catch 中的 return 后直接跳转到 finally 中执行
+
+*   永远不要在 finally 中包含 return 语句, 因为 finally 语句最后执行, 其会覆盖 try/catch 中的返回值
 
 ### try-with-resource
 
@@ -605,6 +606,228 @@ public record Person(String name, int age) {
 按照 gpt 的说法: Records enhance readability and maintainability, especially in scenarios where data transfer objects (DTOs) or data containers are used to represent plain data without any behavior.
 
 >   好了这下后面再写 POJO 的时候就写成 record
+
+# shifting
+
+其实需要区分的也只有算数右移和逻辑右移
+
+*   `>>`: Arithmetic Right Shift => 算数右移, 负数右移高位补 0
+*   `>>>`: Unsigned Right Shift => 逻辑右移, 不管正负高位均补 0
+
+在 java 中, 只有整数可以进行移位, 其中 byte, char, short 在进行移位时均会被先转化为 int 再执行移位
+
+# 基础数据类型
+
+byte, char, short, int, float, long, double, boolean => 在 java 中 char 占两个字节
+
+基础数据类型并不一定保存在栈空间中, 如果基础数据类型是局部变量, 则其保存在栈中, 而如果其作为成员变量, 则其保存在堆中
+
+jvm 默认对基础类型的包装类进行了缓存 => Byte, Short, Integer, Long 默认缓存 [-128, 127], Character 缓存 [0, 127], Boolean 直接缓存了 True 和 False; 浮点数不缓存
+
+>   范围可以通过修改 jvm 启动参数修改 
+
+基础数据类型和包装类同时使用时, 可能涉及到自动装箱/拆箱
+
+```java
+Integer a = 10; // 装箱
+int b = a; // 拆箱
+```
+
+在编译时, 装箱会被编译为 Integer.valueOf(); 而拆箱会被编译为 Integer.intValue() => 字节码分别变为 invokestatic 和 invokevirtual
+
+
+
+# static
+
+static 类型的变量, 方法对属于类的, 在类加载阶段存在 \<clinit> => 不可以在 static 中调用非静态成员 (内存中可能不存在非静态成员)
+
+# abstract
+
+抽象类有点类似接口, 区别在于接口中成员变量必须为常量 (public static void), 而抽象类中成员变量可以被赋值
+
+# 深/浅拷贝
+
+深拷贝的对象完全独立 => 对象本身独立, 对象引用的其他对象也独立
+
+浅拷贝的对象也是独立的, 但是拷贝的对象引用的对象时一致的, 只有拷贝的对象本身是独立的
+
+在 java 中对象传递都是引用拷贝的 => 对象也不独立, 可以认为传递的只是一个引用而已, 不同的变量名保存的引用指向的都是同一个对象
+
+# equals() & hashCode()
+
+至少在集合类中, hashCode 也被用来比较对象是否一致, 在进行对象比较的时候, 通过先比较 hashCode() 快速判断对象不相同的情况, 一定程度上加速了比较对象的效率
+
+与此同时, 也意味着, 相同的对象必然具有相同的 hashCode, 如果需要重写 equals() 方法, 则必须也要同步修改 hashCode(), 保证对象 equals() 为 true 时, hashCode() 必然相同
+
+# 字符串
+
+其实就是 String 那一系列东西:
+
+*   String 在 java 中时 immutable 的, String 类型的拼接其实是创建了新的 String 对象; 而 StringBuffer 与 StringBuilder 是可变字符串, 通过 append() 方法进行字符串拼接时不会创建新的 StringBuffer(StringBuilder) 对象
+
+*   StringBuffer 与 StringBuilder 最大的区别在于, StringBuffer 是多线程安全的, 操作之前需要先获取锁, 在单线程环境下, StringBuilder 的效率是最高的
+
+*   String 类型十分特殊, 使用关键字 final 修饰, 不可以被继承; 此外用来保存字符的 byte(char) 数组被 private final 修饰, 无法被访问修改; 尽管不建议这么做, 但 StringBuilder 确实可以通过修改 byte 数组实现字符的修改
+
+*   jdk 9 之后, String 使用 byte 数组保存字符, 支持单字符编码和多字符编码两种编码方式, 在大多数情况下 (ASCII 字符下), 可以压缩字符串空间 => char 在 java 中占用两个字节
+
+*   jdk 9 之后, 字面量的字符串拼接 "+", 会被优化为方法 makeContractWithConstants() => 编译优化保证了字面量的拼接不再需要使用 StringBuilder 拼接了
+
+*   字符串可以通过 intern 保存在字符串常量池中 => 注意字面量形式声明的字符串对象与通过 new 方式声明的字符串变量的区别
+
+*   对于字符串字面量尽可能使用 final 修饰:
+
+    ```java
+    String s1 = "abc";
+    String s2 = "def";
+    String s3 = s1 + s2; // 此时的字符串拼接调用 makeConstractWithConstants() 返回一个堆上分配对象
+    
+    final String s1 = "abc";
+    final String s2 = "def";
+    String s3 = s1 + s2; // 此时的字符串拼接被编译器通过 constant folding 优化, s3 其实指向了字符串常量池 
+    ```
+
+>   不管八股怎么考, 都不建议使用 == 进行字符串相等的判别, 一律调用 equals 处理
+
+# generic
+
+一般而言都称泛型用在三个地方: 泛型接口, 泛型类, 泛型方法 => 其中泛型方法主要针对静态方法, 如果是非静态的, 完全可以使用泛型类表示
+
+```java
+public static <T> void func(T t) {}
+```
+
+静态泛型方法的意义是, 泛型类只有在实例化对象时才传入泛型对应的实际类型, 而静态方法显然在完成类加载后就可以调用了, 不需要等待对象实例化, 自然没有办法将类型的泛型传递到静态方法的泛型类型上
+
+jdk 提供的泛型机制在编译期间会进行泛型擦除, 因此泛型其实可以认为是编译器提供的机制, 和 jvm 无关, 好处是 jvm 在运行时不需要识别额外的对象, 减少 jvm 开销
+
+这种类型擦除会导致方法重载报错
+
+```java
+void print(List<Integer> list);
+void print(List<String> list);
+```
+
+jvm 在运行时只认识类型 List, 既不是 List\<Integer>, 也不是 List\<String>
+
+## 桥方法
+
+主要用于子类继承父类时, 使用指定的类类型重写了父类的方法
+
+```java
+class Parent<T> {
+    void func(T t) {
+    }
+}
+
+class Son extends Parent<Integer> {
+    @Override
+    void func(Integer x) {
+        x ++; 
+    }
+}
+```
+
+注意到在编译期间进行类型擦除, 导致父类方法 func 被编译为
+
+```java
+class Parent {
+    void func(Object t) {
+    }
+}
+```
+
+由于子类继承了父类, 并重写了方法 func, 因此编译器在编译时会自动生成桥方法, 将子类编译为
+
+```java
+class Son extends Parent {
+    
+    @Override
+    void func(Object x) {
+        func((Integer)x);
+    }
+    
+    void func(Integer x) {
+        x ++; 
+    }
+}
+```
+
+## 通配符
+
+尽管类型存在继承关系, 但是泛型后的集合并不存在继承关系, 比如 Integer extends Object, 但是 List\<Integer> 并不是 List\<Object> 的子类
+
+为了让泛型之间存在继承关系, java 规范中添加了通配符
+
+无界通配符 `?`, 上界通配符 `? extends xxx` => 泛型类型是上界 (父类) 受限的, 下界通配符 `? super xxx` => 泛型了类型是下界 (子类) 受限的
+
+>   List\<?> 与 List 存在本质区别, List\<?> 表示当前 list 存储了某种特定类型, 但由于没有上下界, 因此并不能确定当前类型具体是什么类型, 因此不能向 list 中添加元素
+
+`? extends xxx` 与 `? super xxx` 存在区别: PECS (producer use extend, consumer use super), 使用 `? extends xxx` 的可以用于获取泛型元素, 而使用 `? super xxx` 的可用用于存储泛型元素
+
+# annotation
+
+jdk 5 引入的新特性, java 代码变臭的主要原因, 注解在解析后生效, 一般而言, 注解要么在编译期间被注解处理器扫描处理, 要么保留在运行期, 通过反射的方式获取注解的值
+
+>   必然在 @QueryRedis 中通过注解的方式保存保存在 Redis 中的 key
+
+# serialize/deserialize
+
+主要的作用是用于对象的传输/存储
+
+通过将关键字 transient 作用在对象成员变量中, 可以使得对应字段不会被序列化, 而在反序列化时, 对应字段会被赋为 0 值
+
+>   transient 只能作用与成员变量
+>
+>   static 类型的字段属于类, 在对象的序列化时, static 的字段不会被序列化
+
+为了使用 jdk 自带的序列化, 需要让对象实现接口 Serializable, 该接口中并没有定义任何方法, 仅仅用来告知编译器当前类型是可以进行序列化的
+
+此外如果使用 jdk 序列化, 最好在实例对象中添加常量 serialVersionUID, 根据编译规范, 类型必须为 `static final long`, 用来标识当前对象的版本号, 这样在进行反序列化时, 首先会比较当前二进制对象和 java 对象的版本号是否相同, 如果不同会抛出异常 InvalidClassException
+
+>   serialVersionUID 使用 static 修饰, 但依旧会被序列化, 这是 java 本身的语言规范, 也只有名字为 serialVersionUID 的静态 long 类型的常量才会被序列化
+
+# reflection
+
+获取 Class 对象的方式:
+
+*   通过类型本身:
+
+    ```java
+    Class<Integer> c = Integer.class
+    ```
+
+*   通过对象获取: 
+
+    ```java
+    Integer i = 10;
+    Class<? extends Integer> c = i.getClass();
+    ```
+
+*   通过类型全路径名获取:
+
+    ```java
+    Class<?> c = Class.forName("java.lang.Integer");
+    ```
+
+*   通过类加载器获取:
+
+    ```java
+    Class<?> c = ClassLoader.getSystemClassLoader().loadClass("java.lang.Integer");
+    ```
+
+    >   当通过类加载器获取某个类时, 并不会完成类加载, 即不会调用 \<clinit>
+
+# 语法糖
+
+很多 java 语法其实都是语法糖的封装, 这些语法糖在编译阶段会经历 de-sugar (脱糖), jvm 本身不识别语法糖
+
+*   switch for string: switch 的 case 语句中一般写的都是基础数据类型, 在 jdk 7 之后, case 的类型可以为 String 类型, 这个其实就是语法糖, 在编译时, String 类型的变量会被等效为 hashCode + equals() 的形式, 即 case 的是 long 类型的 hashCode, 而在 case 内部进一步通过 equals() 判断字符串是否真的匹配
+*   generic: 其实就是泛型的类型擦除 (也不算是语法糖吧)
+*   装箱/拆箱: 这个前面说过, 本质上调用了 valueOf 与 intValue (对于 int 类型而言)
+*   可变参数方法: 其实就是数组, 首先该方法声明会将参数声明脱糖为数组, 而所有调用的地方也都会将各个参数以数组的方式传入
+*   枚举: 编译器会将其翻译为被 final 修饰的继承了 Enum 类型的类
+*   for-each: 最经典的语法糖
 
 
 

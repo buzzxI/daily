@@ -3417,6 +3417,7 @@ class Main {
 		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/acwing_1074.png" />
 	</a>
 </div>
+
 和上一题类似, 上一题中的限制是节点的体积限制, 本题的限制是边数的限制, 定义状态 f\[i][j] 表示节点 i 所在子树中保留树枝数不超过 j 时可以保留的最多苹果数
 
 ```cpp
@@ -3471,6 +3472,126 @@ int main() {
     printf("%d", f[1][q]);
 }
 ```
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/11/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/05/27/10:56:37:acwing_11.png" />
+	</a>
+</div>
+
+类似之前的子序列问题, dp 求完最值之后, 就开始求解方案数了, 本质上和普通的背包 dp 是类似的
+
+定义状态 g\[i][j] 表示考虑前 i 个物品, 体积不超过 j 时达到最大价值的方案数目
+
+普通的 01 背包, 状态转移方程: f\[i][j] = max(f\[i - 1][j], f\[i - 1][j - v[i]] + w[i])
+
+而在考虑方案数时, 状态一定从最大价值转移而来, 在满足 f\[i][j] = f\[i - 1][j] 时, 有 g\[i][j] = g\[i - 1][j]; 而在满足 f\[i][j] = f\[i - 1][j - v[i]] + w[i] 时, 有 g\[i][j] = g\[i - 1][j - v[i]] + w[i]
+
+初始状态 g\[0][j] 均为 1, 表示不考虑任何物品时, 体积不超过 j 的方案数, 由于此时不考虑任何物品, 因此都只有一种选择方案 
+
+```java
+import java.io.*;
+import java.util.*;
+
+class Main {
+    private static final int MOD = (int)1e9 + 7;
+    private static final BufferedReader ins = new BufferedReader(new InputStreamReader(System.in));
+    private static final StreamTokenizer in = new StreamTokenizer(ins);
+    private static final PrintWriter out = new PrintWriter(System.out);
+    
+    public static void main(String[] args) throws IOException {
+        int n, v;
+        in.nextToken();
+        n = (int)in.nval;
+        in.nextToken();
+        v = (int)in.nval;
+        int[] vs = new int[n + 1];
+        int[] ws = new int[n + 1];
+        for (int i = 1; i <= n; i ++) {
+            in.nextToken();
+            vs[i] = (int)in.nval;
+            in.nextToken();
+            ws[i] = (int)in.nval;
+        }
+        
+        int[][] f = new int[n + 1][v + 1];
+        int[][] g = new int[n + 1][v + 1];
+        
+        Arrays.fill(g[0], 1);
+        
+        for (int i = 1; i <= n; i ++) {
+            for (int j = 0; j <= v; j ++) {
+                f[i][j] = f[i - 1][j];
+                if (j >= vs[i]) {
+                    f[i][j] = Math.max(f[i][j], f[i - 1][j - vs[i]] + ws[i]);
+                    if (f[i][j] == f[i - 1][j - vs[i]] + ws[i]) g[i][j] = (g[i][j] + g[i - 1][j - vs[i]]) % MOD;
+                }
+                if (f[i][j] == f[i - 1][j]) g[i][j] = (g[i][j] + g[i - 1][j]) % MOD;
+            }
+        }
+        
+        out.println(g[n][v]);
+        out.close();
+    }
+}
+```
+
+01 背包可以使用滚动数组优化, 统计方案个数时也可以使用滚动数组优化
+
+```java
+import java.io.*;
+import java.util.*;
+
+class Main {
+    private static final int MOD = (int)1e9 + 7;
+    private static final BufferedReader ins = new BufferedReader(new InputStreamReader(System.in));
+    private static final StreamTokenizer in = new StreamTokenizer(ins);
+    private static final PrintWriter out = new PrintWriter(System.out);
+    
+    public static void main(String[] args) throws IOException {
+        int n, v;
+        in.nextToken();
+        n = (int)in.nval;
+        in.nextToken();
+        v = (int)in.nval;
+        int[] vs = new int[n + 1];
+        int[] ws = new int[n + 1];
+        for (int i = 1; i <= n; i ++) {
+            in.nextToken();
+            vs[i] = (int)in.nval;
+            in.nextToken();
+            ws[i] = (int)in.nval;
+        }
+        
+        int[] f = new int[v + 1];
+        int[] g = new int[v + 1];
+        
+        Arrays.fill(g, 1);
+        
+        for (int i = 1; i <= n; i ++) {
+            for (int j = v; j >= vs[i]; j --) {
+                int max = Math.max(f[j], f[j - vs[i]] + ws[i]);
+                int cnt = 0;
+                if (max == f[j]) cnt = (cnt + g[j]) % MOD;
+                if (max == f[j - vs[i]] + ws[i]) cnt = (cnt + g[j - vs[i]]) % MOD;
+                f[j] = max;
+                g[j] = cnt;
+            }
+        }
+        
+        out.println(g[v]);
+        out.close();
+    }
+}
+```
+
+<div style="text-align:center;">
+	<a href="https://www.acwing.com/problem/content/11/" >
+		<img src = "https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/05/27/11:25:48:acwing_12.png" />
+	</a>
+</div>
+
+
 
 # 树状数组
 

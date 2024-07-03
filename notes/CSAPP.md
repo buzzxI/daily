@@ -8083,7 +8083,7 @@ free(p2) 会释放掉中间的 block，当应用程序调用过 free 后，应�
 *   splitting(分割): 某些情况下 allocator 可能需要将一个大的空闲的 block 分割为两个 block，其中一个用来满足请求，另外一个作为空闲 block 以满足未来的请求
 *   coalescing(合并): allocator 需要考虑如何处理因为 free 请求而出现的连续的空闲的 block
 
-allocator 需要实现的功能类似于 malloc 和 free，分别表示分配一个特定大小的 block 和释放一个之前分配过的 block，allocator 实际通过操作 全局变量 brk 实现对堆大小的修改，特别的在 linux 中 allocator 通过 syscall sbrk 修改全局变量 brk
+allocator 需要实现的功能类似于 malloc 和 free，分别表示分配一个特定大小的 block 和释放一个之前分配过的 block，allocator 实际通过操作全局变量 brk 实现对堆大小的修改，特别的在 linux 中 allocator 通过 syscall sbrk 修改全局变量 brk
 
 ## implicit free list
 
@@ -8717,8 +8717,6 @@ buddy system 一次可以分配若干 page, 连续的 page 组成一个 block, �
 
 通过空闲列表数组 (array of free list) 可以实现 buddy system
 
-
-
 ## garbage collection
 
 后面讨论的 allocator 是具有垃圾回收功能的，即分配给用户的内存，不需要用户手动 free 掉，特别的，这里主要讨论的是 Mark & Sweep (标记清除) 算法
@@ -8840,7 +8838,7 @@ void sweep(ptr b, ptr end) {
 *   mm_free: 含义和 free 完全一致
 *   mm_realloc: 含义和 realloc 完全一致
 
-~~所以malloc-lab 可以认为是造轮子~~
+~~所以 malloc-lab 可以认为是造轮子~~
 
 这个实验实现的是一个 allocator，csapp 原书花了很多的篇幅以 implicit free list 为例，讲述了 allocator 的设计，从渐进式的角度考虑，该 lab 也应该先实现一个基础的 implicit free list 的版本，然而我做的时候上来就写了 segregated free list 的版本，然后就调试了三周 :sob:，果真应该循序渐进的
 

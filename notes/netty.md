@@ -582,7 +582,7 @@ ChannelOption.SO_KEEPALIVE 表明 server 会定期向 client 发送心跳包, �
 
 ## echo server
 
-这个应该是除了 discard server 之外, 最简单的 echo server 了 [RFC 862 - Echo Protocol](https://datatracker.ietf.org/doc/html/rfc862)
+这个应该是除了 discard server 之外, 最简单的了 [RFC 862 - Echo Protocol](https://datatracker.ietf.org/doc/html/rfc862)
 
 为了实现 echo server 只需要修改 handler 即可, 在上面的 DiscardServerHandler 中, channelRead() 方法只会不断打印来自 client 的消息, 为了实现一个 echo server 只需要在 channelRead() 中额外添加将消息返回给 client 的逻辑即可
 
@@ -1009,7 +1009,7 @@ netty 使用 ChannelHandler 接口抽象各种 IO 操作, 实际的数据有两�
 
 不过要注意的是由于 ChannelInboundHandlerAdapter 简单的行为 (向后传递), 其不会自动将接收到的 msg 释放掉, 而 SimpleChannelInboundHandler 在 ChannelInboundHandlerAdapter 的基础上, 不仅限制了 msg 的类型, 还会自动释放 msg
 
->   SimpleChannelInboundHandler 中需要重写的方法为 channelRead0, 而不是 channelRead, 这是因为 channelRead 会调用 channelRead0 进行逻辑处理, 并且包含了 msg 自动释放的逻辑, 为了使用自动释放的便捷性, 所有业务逻辑建议放在 channelRead0 中
+>   SimpleChannelInboundHandler 中需要重写的方法为 channelRead0, 而不是 channelRead, 这是因为 SimpleChannelInboundHandler 已经重写了 channelRead, 在其内部会调用 channelRead0 进行逻辑处理, 并且包含了 msg 自动释放的逻辑, 为了使用自动释放的便捷性, 所有业务逻辑建议放在 channelRead0 中
 
 ### ChannelPipeline
 
@@ -2039,6 +2039,59 @@ public class ProviderHandler extends SimpleChannelInboundHandler<RpcRequest> {
 注意到 handler 的实现, 因为 RpcRequest 中仅仅包含了类名和方法名, 为了在 server 端进行方法调用, 这里需要使用反射
 
 这里认为每个在 RPC 中提供的服务 (接口), 其实现类在名字上都添加了一个 Impl, 并进行类型的搜索; 然后需要根据参数类型和方法名获取对应的方法; 在通过反射创建对象后, 调用对应的方法, 并将结果封装到 RpcResponse 中返回给 client
+
+# Server IO model
+
+>   [Essential Technologies for Java Developers: I/O and Netty](https://www.alibabacloud.com/blog/essential-technologies-for-java-developers-io-and-netty_597367)
+
+## traditional IO model
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/06/24/21:15:02:traditional_io_model.png)
+
+server 对于每个来自 client 的 request 使用独立的一个进程 (线程) 处理, 这个进程 (线程) 需要负责: 接受 -> 解码 -> 计算 -> 编码 -> 传输; 每个进程都需要处理完整的流程
+
+request 的数目越多 server 创建的进程 (线程) 数目越多, 在大量请求的场景中, 性能显著恶化; 一般而言可以通过线程池限制 server 创建进程的数目, 缓解这个问题
+
+但是这个 model 存在一个很大的问题, 即如果 request 的 compute 时间过长, 那么整个 server 将不能处理任何来自 client 的请求
+
+## reactor model
+
+基于事件的 IO 处理模型, 主要由两部分组成:
+
+*   reactor: 一个独立的线程, 负责监听事件, 并调用适当的 handler 处理事件
+*   handler: 处理 IO 请求, 可能是多线程的
+
+reactor model 本身也可以分为多种类型
+
+### single-threaded
+
+one reactor + single thread => redis
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/06/24/21:26:44:single_thread_reactor_model.png)
+
+reactor 使用 selector 监测 connection event 与 receive event; reactor 使用 acceptor 作为 connection event 的 handler, 使用更为一般的 handler 处理 read 请求
+
+>   acceptor 本身也只是创建一个普通的 handler 而已
+
+值得注意的是所有的 handle 都是按照单线程执行的 (IO multiplexing)
+
+### multi-threaded
+
+one reactor + multi thread
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/06/24/21:32:15:multi_thread_reactor_model.png)
+
+注意到和上面最大的区别在于, handler 仅仅负责 read request 与 send response, 而 server 本身会使用线程池对 request 进行处理
+
+在该模式下, 本质上还是使用线程池进行计算, 和 traditional model 相比, 可以在大量 request 下仍能够处理 client 请求, 但也就止于此了 (还是可能被恶意 request block 掉)
+
+### primary-secondary threaded
+
+multi reactor + multi thread 
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/06/24/21:40:05:primary_secondary_reactor_model.png)
+
+main reactor monitor connection event, sub reactor create handler to handle subsequent event
 
 
 

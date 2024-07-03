@@ -633,21 +633,27 @@ CPU 进入 supervior mode 之后, 控制权交给 kernel, kernel 可以通过读
 
 ### xv6 trap
 
-xv6 将 syscall, exception(illegal operations), interrupt(中断) 统称为 trap, 在 xv6 中 trap 的调用机制为: uservec() -> usertrap() -> usertrapret() -> userret()
+xv6 将 syscall, exception(illegal operations), interrupt(中断) 统称为 trap
 
 >   在 csapp 中 trap 特指 syscall, 而使用 exception 作为统称. 无论怎么叫, 只需要知道当应用程序遇到了 syscall, exception, interrupt 后程序 control flow 发生改变, 处理器不会立刻执行下一条指令, 而是跳转到 exception handler, 而最终返回到程序的**下一条指令, 当前指令或者终止程序**
 
+xv6 处理 trap 的过程可以分为四个阶段: RISC-V CPU 硬件对 trap 做出反应 -> 执行一些汇编代码, 为后续跳转到 kernel 中的 c 代码做铺垫, 执行特定的 c 代码根据当前 trap 类型调用 trap 处理函数, 执行 syscall/device-driver service routine
+
+>   xv6 对 trap 做出反应的程序被称为 handler -> 要注意的是一般这个 handler 是包含汇编部分的
+
 trap handler 进行异常处理的时候不会修改应用程序本身的状态 (除非是非法操作导致的程序终止), 因此 xv6 在进行异常处理的前需要保存应用程序状态, 并在返回的时候恢复应用程序的状态信息
 
->   这里所谓的状态信息其实就是应用程序进入异常时, 应用程序寄存器和内存的值
+>   这里所谓的状态信息其实就是应用程序进入异常时, 应用程序寄存器和内存的值 (上下文信息)
 
-risc-v 提供了专门用于处理异常的 privilege register:
+risc-v 提供了专门用于处理异常的 privilege register: (要注意的是 register 是每个 CPU 独有的, 因此一块芯片上的多个核心可以同时处于不同的 trap handler 中)
 
 *   stvec: trap handler address, 发生异常后跳转到 stvec 对应的地址
 
 *   sepc: store pc, 异常处理结束后的返回地址, 在进入 trap handler 时, 取值为用户应用程序的 pc
 
     >   在 trap handler 中可能对 sepc 进行修改, 比如 syscall 的返回地址应该是当前指令的下一条指令, 比如缺页异常的返回地址应该是当前指令
+    >
+    >   程序通过指令 sret 从 trap handler 中返回, sret 会使用 sepc 的值将 pc 的值覆盖掉
 
 *   scause: reason for trap(number), 一个整数表示, 引发 trap 的原因
 
@@ -658,23 +664,54 @@ risc-v 提供了专门用于处理异常的 privilege register:
 *   sstatus: 可以认为是控制寄存器, 其对状态的控制通过 bit mode 决定, 这里主要考虑 SIE 和 SPP bit
 
     *   SIE: whether enable device interrupt, 将 SIE 置 0 后 risc-v 不再接收硬件中断
+    
     *   SPP: 用来区分来自 user mode 和 supervisor mode 的 trap, SPP 为 0 表示 trap 是在 user mode 下产生的, SPP 为 1 表示 trap 是在 supervisor mode 下产生的
+    
+        >   主要目的是告知 RISC-V CPU 在执行完 sret 后的异常级别
 
 >   上述寄存器使用 s 作为前缀, 在 risc-v 中表示, 前缀为 s 的寄存器只能在 supervisor mode 下访问到, 前缀为 m 的寄存器只能在 machine mode 下访问到
 
 *   stval: 当 load/store page fault 时, stval 为导致 fault 发生的地址
 
+risc-v 处理器在遇到 trap 时的处理很有限:
+
+*   检查一下寄存器 sstatus 的 SIE bit 是否已经被置为 0, 如果 SIE 已经为 0, 则直接返回
+*   将寄存器 sstatus 的 SIE bit 置为 0 (SIE 的机制保证 risc-v 处理器在 trap handler 中不会继续被打断)
+*   将 pc 的值复制到 sepc 中
+*   根据当前的异常级别填写寄存器 sstatus 的 SPP bit
+*   根据当前异常的类型填写寄存器 scause
+*   处理器进入 supervisor mode
+*   将 stvec 的值复制到 pc 中
+
+此后 risc-v 处理器会从 pc 处开始执行新的 trap handler
+
+>   注意 risc-v 处理器没有切换页表, 没有切换 kernel stack, 甚至没有保存当前状态下寄存器的值 (除了 pc) -> 这些工作时 kernel 在执行 trap handler 之前需要进行的
+>
+>   实时上除了 xv6 之外, 某些 os 甚至会省去切换 page table 的环节以提高响应 trap 的性能
+
 ### user space trap
 
-user application 通过 ecall 引起 trap, 此时程序会跳转到寄存器 stvec 指向的地址, risc-v 不会在发生 trap 时自动完成 user process page table 和 kernel page table 的切换, 直接将 trap handler 放在 user mode 是不太合适的, 因此 xv6 提供了一个 trampoline page, 该 page 下完成了 page table 的切换
+最典型的 user space trap 其实就是 syscall (ecall)
 
-对于 os 而言, trap handler 相对于 user application 应该是透明的, 即在执行 trap handler 之前, 需要保存当前进程的上下文信息, 以便在 handler 返回的时候可以回到正确的位置(发生 trap 的地方, 或者发生 trap 的下一条指令, 具体的取决于 trap 的类型), xv6 将寄存器信息保存在了 trapframe 中
+>   在 user mode 下也是存在 exception 和 interrupt 的
 
-进程的 trampoline page 和 trapframe page 被映射到了地址空间的最高处:
+xv6 处理 user space trap 调用链如下: uservec() -> usertrap() -> usertrapret() -> userret()
+
+>   其中 uservec() 和 userret() 位于 trampoline.S 中 (汇编); 而 usertrap() 和 usertrapret() 位于 trap.c 中
+
+根据前面的描述, risc-v 处理 trap 时不会切换 page table, 且切换后执行 stvec 处的指令, 因此 stvec 处保存的地址一定是 user mode page table 下的合法地址 !
+
+而 risc-v 跳转到 stvec 后已经处于 supervisor mode 了, 后续 xv6 执行 trap handler 时需要切换到 kernel page table, stvec 处保存的地址也一定是 supervisor mode page table 下的合法地址
+
+xv6 将 stvec 保存的地址定义为 trampoline page, 其中保存了函数(汇编) uservec 的指令, trampoline page 被定义在了地址空间的顶部 0xffffffffffffffff 下的第一个 page
 
 ![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/07/31/11:35:00:xv6_process_virtual_address_space_layout.png)
 
-在 xv6 中, stvec 指向的地址为 uservec, 因为涉及到保存进程上下文(寄存器状态)和页表切换, 因此这部分是使用汇编实现的:
+uservec 下, xv6 首先执行寄存器上下文的保存(上下文信息直接保存在 trampoline page 下), 然后加载在启动时已经预先保存的 kernel stack， kernel page table 信息, 随后跳转到函数 usertrap 中
+
+>   由于 risc-v 仅支持通过寄存器偏移地址的方式将寄存器中的数据保存在内存中, 而在 user mode 下各个通用寄存器都已经包含了原始数据的, 不管那个寄存器加载基址都是不合适的
+>
+>   这里就体现出 sscratch 的作用了, xv6 首先将 a0 的值保存在 sscratch 中, 然后使用 a0 加载 trampoline page 的基址, 剩余的寄存器信息都通过 a0 基址保存在 trampoline 中
 
 ```assembly
 # trampoline.S
@@ -759,13 +796,19 @@ uservec:
         jr t0
 ```
 
->   trampoline.S 的代码的主要目的是实现寄存器的保存, 而因为对于应用程序而言, 为了将所有寄存器的值保存在 trapframe 中, 首先需要将 trapframe 的地址保存到某个寄存器中, 这里使用的是寄存器 a0
->
->   而言应用程序可能正在使用寄存器 a0, 如果直接进行覆盖将导致用户数据的丢失, 因此这里用到了 buffer register -> sscratch, 先将 a0 的值保存在 sscratch 中, 然后将 trapframe 的地址保存在 a0 中, 再通过 a0 保存各个寄存器的值, 最后再将 a0 的值保存下来
+进入 usertrap 后, 首先修改寄存器 stvec 的取值, 使其从 trampoline 中的 uservec 切换到 kernelvec, 表示在 supervisor mode 下, 后续的各个 trap 均为 supervisor trap, 不再依靠 trampoline 处理
 
-xv6 使用 trapframe page 保存当前进程的上下文, 在完成页表切换后, 才会跳转到真正的 trap handler -> usertrap()
+此外寄存器 sepc 的取值会被保存下来 (执行 user process context 切换之前), 以防在 kernel mode 下进行 user process context 切换后, 通过修改 sepc 的方式覆盖了当前 user process 的返回地址
 
->   因此 trampoline page 是一个特殊的 page, 其同时保存在了 kernel page table 和 user application page table 中
+>   xv6 kernel 本身是 single thread 的, sepc 会被多个 user process 共享
+
+usertrap 根据 trap 的类型进行处理, 寄存器 sacuse 保存了造成 trap 的原因, 可以通过默认的分支看出来, scause 为 8 时表示发生了 syscall
+
+>   更多的 scause 需要查询 risc-v privilege instruction 手册
+
+三种类型的 trap: syscall 通过函数 syscall() 处理, interrupt 通过 devintr() 处理, 而如果是 exception, xv6 会直接 kill 当前 process
+
+值得注意的是, 如果当前 trap 为 syscall, kernel 会将 pc 的取值自增 4, 使得 control flow 返回到 user instruction 中 syscall (ecall) 后的一个指令
 
 ```c
 // trap.c
@@ -819,17 +862,63 @@ void usertrap(void)
 }
 ```
 
-usertrap() 根据 trap 的类型进行处理, 寄存器 sacuse 保存了造成 trap 的原因, 可以通过默认的分支看出来, scause 为 8 时表示发生了 syscall
+usertrap() 的结尾调用了 usertrapret(), 表示异常已经被处理完成, 后续返回到 user mode
 
->   更多的 scause 需要查询 risc-v privilege instruction 手册
+usertrapret() 的主要作用是为后续在此进入 kernel handler 做准备, 因此: 将函数 uservec 的地址保存在了寄存器 stvec 中, 将 kernel page table 的位置, kernel stack 的位置, trap handler 的地址保存在了当前进程的 trampiline page 中
 
-可以看到的时当发生 syscall 后, 程序的返回值应该时造成 syscall 发生的下一条指令, 因此在 syscall (scause 为 8) 的情况下, 手动让其 trapframe 的 epc (返回地址) + 4
+>   这些信息看起来并不像是每次进入 kernel 都会变化的, 在 os 启动之后就不会再次修改, 主要原因在后面解释
 
-usertrap 的结尾调用了 usertrapret(), usertrapret() 看上去有点奇怪, usertrapret() 首先保存了部分信息, 比如将函数 uservec 的地址保存在了寄存器 stvec 中, 将 kernel page table 的位置, kernel stack 的位置, trap handler 的地址保存在了当前进程的 trapframe 中
+随后 usertrapret() 调用 userret, 将应用程序的上下文信息写回寄存器; 要注意的是, 此时当前 kernel 依旧处于 supervisor mode 下, 使用的依旧是 kernel page table, 为了切换回 user page table, usertrapret 以当前进程 page table 的地址为参数调用 userret()
 
-这些信息看起来并不像是每次进入 kernel 都会变化的, 在 os 启动之后就不会再次修改, 主要原因在后面解释
+```java  
+//
+// return to user space
+//
+void
+usertrapret(void)
+{
+  struct proc *p = myproc();
 
-随后 usertrapret 设置好了 sepc, 调用 userret, 将应用程序的上下文信息写回寄存器
+  // we're about to switch the destination of traps from
+  // kerneltrap() to usertrap(), so turn off interrupts until
+  // we're back in user space, where usertrap() is correct.
+  intr_off();
+
+  // send syscalls, interrupts, and exceptions to uservec in trampoline.S
+  uint64 trampoline_uservec = TRAMPOLINE + (uservec - trampoline);
+  w_stvec(trampoline_uservec);
+
+  // set up trapframe values that uservec will need when
+  // the process next traps into the kernel.
+  p->trapframe->kernel_satp = r_satp();         // kernel page table
+  p->trapframe->kernel_sp = p->kstack + PGSIZE; // process's kernel stack
+  p->trapframe->kernel_trap = (uint64)usertrap;
+  p->trapframe->kernel_hartid = r_tp();         // hartid for cpuid()
+
+  // set up the registers that trampoline.S's sret will use
+  // to get to user space.
+  
+  // set S Previous Privilege mode to User.
+  unsigned long x = r_sstatus();
+  x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
+  x |= SSTATUS_SPIE; // enable interrupts in user mode
+  w_sstatus(x);
+
+  // set S Exception Program Counter to the saved user pc.
+  w_sepc(p->trapframe->epc);
+
+  // tell trampoline.S the user page table to switch to.
+  uint64 satp = MAKE_SATP(p->pagetable);
+
+  // jump to userret in trampoline.S at the top of memory, which 
+  // switches to the user page table, restores user registers,
+  // and switches to user mode with sret.
+  uint64 trampoline_userret = TRAMPOLINE + (userret - trampoline);
+  ((void (*)(uint64))trampoline_userret)(satp);
+}
+```
+
+在 userret 中, 指令和 uservec 相呼应的, 返回前先加载 user page table, 然后加载寄存器上下文信息, 最后通过 sret 返回
 
 ```assembly
 userret:
@@ -885,17 +974,21 @@ userret:
         sret
 ```
 
-sret 的返回地址就是之前使用 sepc 保存的地址
+>   sret 的返回地址就是之前使用 sepc 保存的地址
 
 ### first process
 
 这里考虑的是 xv6 中的第一个进程是如何启动的
 
-#### entry
+#### _entry
 
-xv6 的入口是 `/kernel/entry.S`, 在编译的时候对 linker 进行配置, 保证 entry.S 会加载到 0x80000000
+上电开机后, risc-v 执行 bootloader (read only), 加载 xv6 kernel 到内存中, 此后 risc-v 从 _entry(/kernel/entry.S) 处开始执行, 此时 risc-v 处理器处于 machine mode
 
->   xv6 通过 memory-mapping 的方式将硬件的寄存器映射到地址范围: `0x0 ~ 0x80000000`, 当 xv6 操作这部分内存的时候就是在对硬件寄存器进行配置
+>   刚开机时, 页表功能还没有使能, 此时处理器直接使用物理地址寻址
+
+在编译的时候对 linker 进行配置, 保证 entry.S 会加载到 0x80000000
+
+>   xv6 通过 memory-mapping 的方式将硬件的寄存器映射到地址范围: `0x0 ~ 0x80000000`, 当 xv6 操作这部分内存的时候就是在对硬件寄存器进行配置, 这也是为什么 xv6 的入口函数从 0x80000000 开始
 
 这部分代码的功能是初始化函数栈(起始就是设置寄存器 sp), 用来执行后续的 c 程序
 
@@ -917,6 +1010,7 @@ _entry:
         csrr a1, mhartid
         addi a1, a1, 1
         mul a0, a0, a1
+        # stack grows down
         add sp, sp, a0
         # jump to start() in start.c
         call start
@@ -939,7 +1033,11 @@ spin:
 
 ![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/07/29/17:26:37:xv6_bootloader_function_stack.svg)
 
-随后通过 `call` 指令跳转到 `start.c` 执行第一个 c 程序 `start()`, 尽管这里是 c 函数, 但是都是通过内联汇编的形式配置 risc-v 的 privileged register
+随后通过 `call` 指令跳转到 `start.c` 执行第一个 c 程序 `start()`
+
+#### start()
+
+尽管这里是 c 函数, 但是都是通过内联汇编的形式配置 risc-v 的 privileged register
 
 ```c
 // start.c
@@ -989,7 +1087,9 @@ start.c 修改了寄存器 `mepc`, 在 xv6 中 epc 表示当异常级别从高�
 
 >   发生 trap 后, 进入 supervisor mode, trap handler 处理结束后设置了寄存器 sepc, 设置的是从 supervisor mode 回到 user mode 的返回地址
 
-上面的各种操作仅仅涉及对寄存器的修改, 每个处理器核心拥有自己的处理器核心, 因此不需要考虑并发问题, 但在进行 kernel 初始化的时候, 会对 kernel 的在内存中的数据结构进行各种初始化操作, 此时涉及到操作内存, 就需要考虑并发问题了, 因此在 xv6 (chcore 也是一样的) 中仅使用单颗核心用来进行初始化操作, 而让其他核心自旋 (hartid 为 0 的核心初始化 kernel, 其余核心自旋)
+#### main()
+
+上面的各种操作仅仅涉及对寄存器的修改, 每个处理器核心拥有自己独有的寄存器, 因此不需要考虑并发问题, 但在进行 kernel 初始化的时候, 会对 kernel 的在内存中的数据结构进行各种初始化操作, 此时涉及到操作内存, 就需要考虑并发问题了, 因此在 xv6 (chcore 也是一样的) 中仅使用单颗核心用来进行初始化操作, 而让其他核心自旋 (hartid 为 0 的核心初始化 kernel, 其余核心自旋)
 
 >   这里值得一提的是, 因为 kernel 尚未完成初始化, 当然 xv6 的 spinlock 也是处于未初始化状态, 因此这里的自旋锁是一个 volatile 类型的变量, 所有被"阻塞"的核心会不断读取这个变量, 在变量为 0 的时候自旋
 
@@ -1068,6 +1168,96 @@ void userinit(void)
 在 kernel 中将进程抽象为 `struct proc`, userinit() 初始化了这个结构体, 值得关注的是, 在 allocproc() 中, 将这个进程初始状态下的寄存器 `ra` 设置地址为 forkret, 进程 p 运行的起点即为 forkret
 
 userinit() 创建的进程运行的代码不是通过 exec 加载的, 这部分代码逻辑写在了 `initcode.S` 中, xv6 将其编译得到二进制码, 存放在 `proc.c` 的数组 `initcode` 中, xv6 强制将其映射到 virtual address 中地址为 0 的地方
+
+因此 xv6 的第一个进程不是被加载到内存中的, 而是已经固化在 xv6 kernel 中了
+
+#### initcode.S
+
+```assembly
+# initcode.S
+# Initial process that execs /init.
+# This code runs in user space.
+
+#include "syscall.h"
+
+# exec(init, argv)
+.globl start
+start:
+        la a0, init
+        la a1, argv
+        li a7, SYS_exec
+        ecall
+
+# for(;;) exit();
+exit:
+        li a7, SYS_exit
+        ecall
+        jal exit
+
+# char init[] = "/init\0";
+init:
+  .string "/init\0"
+
+# char *argv[] = { init, 0 };
+.p2align 2
+argv:
+  .long init
+  .long 0
+```
+
+initNode.S 执行了 syscall: exec, 该 syscall 的作用是加载执行 xv6 的第二个进程 `/init`, 这个程序写在了 `/user/init.c` 中
+
+#### init.c
+
+```c
+// user/init.c
+char *argv[] = { "sh", 0 };
+
+int main(void)
+{
+  int pid, wpid;
+
+  if(open("console", O_RDWR) < 0){
+    mknod("console", CONSOLE, 0);
+    open("console", O_RDWR);
+  }
+  dup(0);  // stdout
+  dup(0);  // stderr
+
+  for(;;){
+    printf("init: starting sh\n");
+    pid = fork();
+    if(pid < 0){
+      printf("init: fork failed\n");
+      exit(1);
+    }
+    if(pid == 0){
+      exec("sh", argv);
+      printf("init: exec sh failed\n");
+      exit(1);
+    }
+
+    for(;;){
+      // this call to wait() returns if the shell exits,
+      // or if a parentless process exits.
+      wpid = wait((int *) 0);
+      if(wpid == pid){
+        // the shell exited; restart it.
+        break;
+      } else if(wpid < 0){
+        printf("init: wait returned an error\n");
+        exit(1);
+      } else {
+        // it was a parentless process; do nothing.
+      }
+    }
+  }
+}
+```
+
+init.c 首先通过 open, 获取来自 console 的 stdin, 并通过 dup 创建 stdout, stderr, 之后的结构就是一个死循环, 循环内部通过 fork + exec 的组合运行 shell 程序, 当 shell 程序因为异常退出后, 下一次循环会再次运行一个 shell
+
+此后 shell 程序会作为 xv6 中的第三个进程运行起来
 
 #### scheduler()
 
@@ -1187,7 +1377,7 @@ swtch:
 >
 >   swtch 换出进程 p 的上下文, 换入 cpu 的上下文, 因为程序运行的起点就是 scheduler(), 因此 cpu 上下文换入的结果就是进入 scheduler 的 for 循环内部, 所以 xv6 的进程调度是很简单的, 只不过是循环遍历整个 proc 数组
 
-#### forkret
+#### forkret()
 
 ```c
 // proc.c
@@ -1210,98 +1400,11 @@ void forkret(void)
 }
 ```
 
-static 类型的 first 仅仅会在第一次调用 forkret 时起作用, 整个 forkret 看起来就是 usertrapret() 的 wrapper function, xv6 运行程序都是从 trap handler 的 "后一半" 开始的
+这是一个被 allocproc() 调用的函数, 表示当前进程从 syscall fork 返回, static 类型的 first 仅仅会在第一次调用 forkret 时起作用, 整个 forkret 看起来就是 usertrapret() 的 wrapper function, xv6 运行程序都是从 trap handler 的 "后一半" 开始的
 
-还记得上面提到过了, 看到 usertrapret() 的时候很奇怪, 而看到这里就知道了, usertrapret() 开头的保存寄存器的操作其实是服务于初始化进程的, 比如为即将运行的进程设置 trap handler vector, 为了可能存在的 trap handler 保存 kernel page table, kernel stack, 这部分信息都保存在进程 virtual address 的 trapframe 中
+还记得上面的 usertrapret() 开头的保存寄存器的操作其实是服务于初始化进程的, 比如为即将运行的进程设置 trap handler vector, 为了可能存在的 trap handler 保存 kernel page table, kernel stack, 这部分信息都保存在进程 virtual address 的 trapframe 中
 
-trap handler 返回时异常级别从 supervisor mode 降为 user mode, 在 allocproc() 中设置了寄存器 epc 的值为 0, 因此随后执行的就是 initcode 的地址为 0 处的代码
-
-#### initcode
-
-initcode.S 仅仅执行了一个 syscall -> exec, 其执行的文件为 `/init`
-
-```assembly
-# initcode.S
-#include "syscall.h"
-
-# exec(init, argv)
-.globl start
-start:
-        la a0, init
-        la a1, argv
-        li a7, SYS_exec
-        ecall
-
-# for(;;) exit();
-exit:
-        li a7, SYS_exit
-        ecall
-        jal exit
-
-# char init[] = "/init\0";
-init:
-  .string "/init\0"
-
-# char *argv[] = { init, 0 };
-.p2align 2
-argv:
-  .long init
-  .long 0
-```
-
-initcode 存在的目的就是为了执行 `/init`, 这个程序写在了 `/user/init.c` 中, 从 initcode 转变为 init, 也表示了从 kernel 进入了 user application
-
-#### init
-
-```c
-// user/init.c
-char *argv[] = { "sh", 0 };
-
-int main(void)
-{
-  int pid, wpid;
-
-  if(open("console", O_RDWR) < 0){
-    mknod("console", CONSOLE, 0);
-    open("console", O_RDWR);
-  }
-  dup(0);  // stdout
-  dup(0);  // stderr
-
-  for(;;){
-    printf("init: starting sh\n");
-    pid = fork();
-    if(pid < 0){
-      printf("init: fork failed\n");
-      exit(1);
-    }
-    if(pid == 0){
-      exec("sh", argv);
-      printf("init: exec sh failed\n");
-      exit(1);
-    }
-
-    for(;;){
-      // this call to wait() returns if the shell exits,
-      // or if a parentless process exits.
-      wpid = wait((int *) 0);
-      if(wpid == pid){
-        // the shell exited; restart it.
-        break;
-      } else if(wpid < 0){
-        printf("init: wait returned an error\n");
-        exit(1);
-      } else {
-        // it was a parentless process; do nothing.
-      }
-    }
-  }
-}
-```
-
-init.c 整体结构是一个死循环, 循环内部通过 fork + exec 的组合运行 shell 程序, 当 shell 程序因为异常退出后, 下一次循环会再次运行一个 shell
-
-至此 xv6 完成启动
+trap handler 返回时异常级别从 supervisor mode 降为 user mode, 在 allocproc() 中设置了寄存器 epc 的值为 0, 因此随后执行的就是用户程序的地址为 0 处的代码
 
 ### use gdb
 
@@ -1612,17 +1715,41 @@ xv6 的虚拟地址有 64 bit, 其中仅低 39 bit 用来寻址, 由于 xv6 使�
 
 xv6 使用三级页表, 每级页表使用 9 bit 索引 (正好对应了 27 bit), 从而每级页表可以容纳的 PTE 有 $2^9 = 512$ 个, 可以粗略认为每个 PTE 包含了一个 64 bit 的地址, 因此每个页表大小为 $2^9 * 2^3 = 2^{12} = 4\text{KB}$ 大
 
-在 risc-v 中 64 bit 地址仅使用了低 56 bit 进行物理寻址, 对于 risc-v 处理器而言, 其寻址的空间范围为 0 ~ $2^{56} - 1$, 从而使得 risc-v 可以支持从物理内存最大为 $2^{56} = 64 \text{PB}$
+在 risc-v 中 64 bit 物理地址仅使用了低 56 bit 进行物理寻址, 在 56 bit 中低 12 bit 和虚拟地址中的第 12 bit 一致, 表示页内偏移量, 而高 44 bit 用来定位物理页 (PPN), 对于 risc-v 处理器而言, 其寻址的空间范围为 0 ~ $2^{56} - 1$, 从而使得 risc-v 可以支持从物理内存最大为 $2^{56} = 64 \text{PB}$
 
 >   这些示例的物理内存不仅仅作为 DRAM 存在, 接入的外设也需要占据地址空间的一部分
 
-因此 PTE 的高 10 bit 在 xv6 中不具有任何作用, 而低 10 bit 作为页表的 flag 存在 (控制作用), 从而每个 PTE 可以用作查询物理地址的部分仅有中间的 44 bit, 为了拼凑得到 56 bit 的物理地址, 在进行查询的时候, 需要补充 12 bit, 对于最低级页表, 补充的 12 bit 为 VPO(virtual page offset), 而其他级页表补充的是 12 bit 0
+对于一个 PTE 而言, 其至少需要包含 44 bit 用来定位物理页, 实际在 xv6 中, 每个 PTE 的低 10 bit 是控制位, 用来进行权限控制, 因此 PTE 中的有效部分为 54 bit
 
-具体的地址翻译如图:
+xv6 进行查询得到 56 bit 物理地址时, 映射规则为 44 bit 的物理页 + 12 bit 的页内偏移, 如果当前为 xv6 的三级页表, 则页内偏移和虚拟地址中的 12 bit 偏移相同, 否则填充为 0, 具体的地址翻译如图:
 
 ![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/08/02/15:37:21:risc-v_xv6.png)
 
 >   PTE 的 flag bit 表示的权限信息包括了: 当前 PTE 是否有效(PTE_V), 当前 page 是否允许 read/write/execute(PTE_R, PTE_W, PTE_X), 当前 page 是否可以在 user mode 下访问到(PTE_U)
+>
+>   如果 PTE_V 被置为 0, 则标识当前页无效, 此时会触发 page table fault (缺页异常)
+
+在 risc-v 的地址空间设计中, 仅 56 bit 用于寻址, 而 xv6 采用的 Sv39 risc-v 虚拟地址中, 仅 39 bit 用于寻址
+
+page table 三层结构的设计可以有效节省存储页表需要空间, 但三级页表的查询也会导致一个虚拟地址需要经过三次查询才能翻译得到物理地址, 因此 translation lookside buffer (TLB) 的设计还是很有必要的
+
+### kernel address space
+
+由于每个进程的地址空间都是相互独立的, 因此每个进程拥有各自独立的页表, 而 kernel 本身也具有自己的页表, 因此对于 xv6 而言, 一共保存了进程数 + 1 个页表
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/06/02/12:15:50:xv6_address_mapping.png)
+
+进程使用的地址空间按照的上图方式映射到实际的物理内存, 由于 xv6 基于 QEMU 运行, 在配置中使用的可用物理内存范围为 0x80000000 ~ 0x88000000 (128 M 的内存)
+
+xv6 kernel 采用 direct-mapping 的方式进行虚拟地址到实际物理地址的映射, 这样做的好处是比较简单, 不需要再考虑外设的映射了, 而 xv6 kernel 中的 trampoline page 和 kernel stack 在 direct-mapping 的基础上, 又使用了一层地址映射
+
+>   trampoline page 是在 user mode 进入 supervisor mode 时使用的, 用来保存寄存器的上下文信息
+>
+>   kernel stack 为每个进程独立的对应在 kernel 中使用的 stack, 当进程将控制交给 kernel 后使用的自然就是 kernel stack
+
+trampoline page 和 kernel stack 之间通过 guard page 分隔, 避免 stack overflow 导致内核数据被修改 (guard page 的 PTE_V bit 为 0)
+
+之所以在 direc-mapping 的基础上再进行一层映射, 很大一部分原因就是希望在 trampoline page 和 kernel stack 之间可以插入本来不再物理内存中存在的 guard page, 使得 xv6 可以在不浪费物理内存的条件下对 stack overflow 检测
 
 ### speed up system calls
 
@@ -1631,6 +1758,10 @@ xv6 使用三级页表, 每级页表使用 9 bit 索引 (正好对应了 27 bit)
 某些 syscall, 比如 getpid() 的目的仅仅是读取某个值, 此时可以让 kernel 和应用程序 share data, 通过将 share data 映射到用户程序的 read only page, 可以高效, 安全的完成数据共享
 
 在这一 part 中, xv6 需要加速 syscall -> getpid(), xv6 在虚拟地址中额外添加了一个 page -> USYSCALL (就在 trapframe 下面), 为了加速 getpid(), 需要在创建进程时, 将进程的 pid 映射到 USYSCALL 中
+
+>   注意在这节之前 xv6 的 memory layout 为 (自顶向下): trampoline page -> trap frame -> guard page -> kernel stack page -> guard page -> ...
+>
+>   这一节相当于的 guard page 和 trap frame 中额外添加了一个 USYSCALL page
 
 ```c
 // memlayout.h
@@ -1834,6 +1965,8 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 }
 ```
 
+>   可以看到 xv6 通过 kalloc 分配实际的物理内存, 并通过页表的方式将该物理页映射到虚拟地址, kernel 负责管理所有的物理内存, 然后将可以被用户进程访问的物理内存通过页表的方式映射到虚拟地址空间
+
 理论上使用 shared page 还可以用来加速 fstat, 当用户程序通过 open 打开文件的时候, 可以将对应文件的 fd 和 stat 保存在 USYSCALL page 中, 调用 close 关闭文件的时候, 将 fd 和 stat 从 USYSCALL page 中释放
 
 ### print a page table
@@ -1877,6 +2010,10 @@ void vmprint(pagetable_t pagetable) {
 ```
 
 >   最麻烦的地方居然是, 如何简单高效的写好前缀
+
+注意到 xv6 在表示页表时, 如果 PTE 的 R, W, X bit 均置为空表示当前 PTE 指向了下一级页表, 否则表示了一个实际的物理页
+
+>   其实也好理解, 毕竟如果一个 page 不让读不让写也不让执行, 那这样的物理页是没有意义的
 
 ### detect which pages have been accessed
 
@@ -2438,6 +2575,8 @@ uint64 sys_sigreturn(void) {
 ```
 
 对于普通的 syscall 而言, 返回 0 表示 syscall 执行正常, 然而这里的返回值不能直接写为 0, 这是因为 risc-v 使用寄存器 a0 保存返回值, 如果 sigreturn 返回 0, 会直接用 0 将程序上下文中寄存器 a0 的值覆盖掉, 因此这里为了避免被覆盖, 这里需要将返回值设置为原来 a0 的值
+
+>   sys_sigreturn 其实是一个兼容性的写法, 用来标识 handler 已经结束了
 
 ## copy-on-write fork
 
@@ -3774,11 +3913,114 @@ bunpin(struct buf *b) {
 
 ## file system
 
-qemu 调用 mkfs 初始化 xv6 的文件系统, 在这个 lab 的测试中会在文件系统中添加/删除若干文件, 为了不影响后续测试, 最好在进行下一次调试之前先 `make clean` 清空之前保存的临时文件 
+xv6 的文件系统通过七层结构抽象:
 
-### Large files
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/06/02/22:12:14:xv6_file_system.png)
 
-xv6 使用 inode 表示一个文件
+最底层为 disk 层, 直接和 qemu 模拟的 disk 交互, 操作单元为 disk block; buffer cache 是 block 的一个缓存, 用来从 disk 获取数据的速度, 此外保证了 disk block 线程安全性, 通过加锁的方式保证相同的 block 在任意时间内最多只有一个 kernel process 对其进行修改 (上一节就是在该层进行锁拆分); logging 层保证了多个 block 操作的原子性, 提供了 transaction 特性 => trasaction 内的 block 要么全都被修改, 要么一个都不修改; inode 层对文件进行了抽象, 每个 inode 都表示了一个包含若干个 block 的文件; directory 层对多个文件进一步使用路径抽象, 构建文件目录, 每个 directory 本质上也是一个 inode, 只不过其文件内容保存的是一系列 inode 和 file name 的映射对; pathname 是在 directory 的基础上通过 directory 的嵌套构建目录树, 本质上还是 directory 那一套
+
+对于一般的用户而言通过 pathname 就可以唯一定位一个文件了, 进一步通过 inode 获取文件内的数据, 实现对 disk block 中数据的修改, 而 xv6 采用和 unix 类似的抽象, 使用 file descriptor 对各类 resource 进行抽象: pipe, decive, file ... 从某些层面上, file descriptor 的设计极大的简化了 unix 上开发
+
+xv6 使用的 disk 由一系列 block 组成, 每个 block 大小为 512 Bytes
+
+>   实际的物理磁盘保存数据是会将整个 disk 分为若干 sector, sector 大小可能和 block 大小不同, 一般而言 block 大小是 sector 大小的倍数
+
+xv6 采用如下方式管理整个 disk:
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/06/02/22:28:49:xv6_file_system_layout.png)
+
+boot block (0) 是 xv6 的保留 block 不使用, super block (1) 保存了 xv6 文件系统的 meta data (file system 管理的 inode 数量, 用于存储数据的 data block 的数量, 用来存储 log 信息的 block 的数量)
+
+从 block (2) 开始就是 log block 了, 其数量通过 meta data 中的信息确定, 在向后保存的是 inode 信息, 每个 inode 中保存了对应文件的 meta data, inode 后是 bitmap 用来表示 data block 的使用情况, 新的数据需要存储时, 需要查询 bit map 找到空闲的 data block 并将数据保存在其中
+
+qemu 会调用 mkfs 生成 super block, 以初始化 xv6 的文件系统
+
+### buffer cache layer
+
+buffer cache layer 有两个作用:
+
+*   缓存 disk block, 提高访问 block 的速度
+*   确保在内存中, 相同的 disk block 只会缓存一份, 且同一时间被缓存的 block 只会被一个 kernel process 使用
+
+该层的实现放在了 bio.c 中, 其中主要暴露了两个接口: bread, bwrite, 分别表示
+
+*   从 disk 中获取某个 block 的缓存备份, 将其抽象为 xv6 中的 buf 返回
+*   将某个 buf 中的数据同步写入到 disk block
+
+kernel 在完成对当前 block 的操作后, 会调用 brelse, 释放该 buf
+
+尽管多个进程可以获取到同一个 block 的 buf, 但同时间只有一个进程可以对该 buf 进行修改, xv6 内部通过 buf 所属的 sleep-lock 实现这一点, bread 会对相应的 buf 添加 sleep-lock, 而 brelse 会释放该 sleep lock
+
+xv6 使用 binit 初始化 buffer, 每个 buffer 对应了 disk 上的一个 block, 默认情况下 xv6 设置了 30 个 buffer, 为了提高访问效率, xv6 使用了 LRU buffer, 即使用双链表维护 buffer, 同时将最近使用访问到的 buffer 放在 head
+
+bread 用来获取 disk 中的 block 备份 buffer, 如果当前 block 还没有在 buffer 中备份, 会递归调用内部封装的 bget, 使用空闲的 buffer 保存该 block, 同时会递归调用 virtio_disk_rw 从磁盘读入数据
+
+```c
+// bio.c
+// Look through buffer cache for block on device dev.
+// If not found, allocate a buffer.
+// In either case, return locked buffer.
+static struct buf*
+bget(uint dev, uint blockno)
+{
+  struct buf *b;
+
+  acquire(&bcache.lock);
+
+  // Is the block already cached?
+  for(b = bcache.head.next; b != &bcache.head; b = b->next){
+    if(b->dev == dev && b->blockno == blockno){
+      b->refcnt++;
+      release(&bcache.lock);
+      // 通过 buffer lock 保证只有一个进程可以获取到 buffer
+      acquiresleep(&b->lock);
+      return b;
+    }
+  }
+
+  // Not cached.
+  // Recycle the least recently used (LRU) unused buffer.
+  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
+    if(b->refcnt == 0) {
+      b->dev = dev;
+      b->blockno = blockno;
+      b->valid = 0;
+      b->refcnt = 1;
+      release(&bcache.lock);
+      acquiresleep(&b->lock);
+      return b;
+    }
+  }
+  panic("bget: no buffers");
+}
+
+// Return a locked buf with the contents of the indicated block.
+struct buf*
+bread(uint dev, uint blockno)
+{
+  struct buf *b;
+
+  b = bget(dev, blockno);
+  if(!b->valid) {
+    // 当前 buffer 为新 buffer, 需要获取磁盘数据
+    virtio_disk_rw(b, 0);
+    b->valid = 1;
+  }
+  return b;
+}
+```
+
+到目前为止一共见到了两个锁, bcache lock 和 buffer lock, 前者用来维护整个 cache 的状态: 具体哪个 buffer 是已经缓存的了, 具体对应的 disk 上的 sector, 哪个 buffer 是空闲的; 而后者是用来保证 buffer 同时间只能被一个 kernel process 读写 (当前 block 被读也被加锁了)
+
+在进程对 block 进行修改了之后需要调用 bwrite 将最新的内容写回 disk
+
+在进程完成了对 block 的读写之后, 会调用 brelse 释放该 block, 使得其他进程可以访问该 block
+
+### inode
+
+>   在这个 lab 的测试中会在文件系统中添加/删除若干文件, 为了不影响后续测试, 最好在进行下一次调试之前先 `make clean` 清空之前保存的临时文件 
+
+xv6 使用 dinode 表示存储在 disk 上的 inode, 而使用 inode 使用保存在 xv6 内存中的 inode; 相比之下, inode 在 dinode 的基础上添加了额外的字段用来维护当前 inode 所属的 block, 以及进程对 inode 的引用情况
 
 ```c
 // fs.h
@@ -3793,11 +4035,51 @@ struct dinode {
 };
 ```
 
+其中 type 属性表示了当前 inode 表示的文件类型, type 为 0 时表示当前 inode 为空闲状态; nlink 表示表示引用了当前 inode 的文件个数; 
+
 inode 使用 12 个 direct pointer 和一个 indirect pointer 存储文件内容, xv6 book 的 fig 8.3 描述了存储方式:
 
 ![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/09/16/19:36:43:file_representation_on_disk.png)
 
 所以 xv6 默认支持最大的文件大小为 12 + 256 => 268 block 
+
+```c
+// file.h
+// in-memory copy of an inode
+struct inode {
+  uint dev;           // Device number
+  uint inum;          // Inode number
+  int ref;            // Reference count
+  struct sleeplock lock; // protects everything below here
+  int valid;          // inode has been read from disk?
+
+  short type;         // copy of disk inode
+  short major;
+  short minor;
+  short nlink;
+  uint size;
+  uint addrs[NDIRECT+2];  // modified for lab: fs
+};
+```
+
+在 inode 的所有操作函数中, iget 与 iput, 分别表示从 disk 中获取一个 inode, 和将一个 inode 持久化到 disk 中; 和 buffer cache 层类似的, inode 层也使用了 buffer, iget 会先对现有的 inode 进行检查, 如果当前 inode 已经缓存在内存中了, 则当前 iget 只会增加 inode 的 ref 计数, 而 iput 也会先对 inode 的 ref 计数进行修改, 只有在 ref 为 0 的时候才会将该 inode 写入到 disk 中
+
+xv6 inode 相关的 lock:
+
+*   itable.lock: 这是一个 spin lock, 类似于 bcache lock, 用来维护每个 inode 内部的 ref 计数原子性, 保证 disk 中相同的 inode 只会在内存中保存一份
+*   inode.lock: 这是一个 sleep lock, 类似于 buffer 的 lock, 用来保证同时间最多只有进程可以访问当前 inode
+
+>   这两个 lock 完全可以类比 buffer 层的 lock
+
+此外由于 inode 表示了文件, 当 inode 的 nlink 为 0 时, 表示该 inode 没有被任何文件引用, xv6 会将该 inode 删除
+
+xv6 inode 层的实现中, iget 一定会返回一个合法的 inode, 但该 inode 内容可能为空, 且 iget 返回的 inode 并没有被当前进程加锁 -> inode 的 ref 字段是线程安全的, 但和 dinode 中相同的字段并不能保证也是线程安全的, 因此进程在使用 inode 之前还需要通过 ilock 对 inode 加锁, 同时如果当前 inode 为空, 还会从 disk 中获取 dinode 并保存在 inode 中; 与之对应的在当前进程使用完 inode 后, 需要通过主动调用 iunlock 释放当前 inode
+
+>   注意到这里的设计和 buffer 层并不相同, 在 buffer 层, 通过 bget 返回的 buffer 一定是一个已经获取了 sleep lock 的 buffer, buffer 可以直接被当前进程使用了
+
+kernel 进程会通过调用 iupdate 将当前 inode 的内容同步到 disk 中
+
+### Large files
 
 为了支持更大的文件大小, 这里 xv6 要求实现 double-indirect pointer, 一个 double-indirect pointer 指向一个 block, 其存储内容为 indirect pointer, 而其中每个 indirect pointer 指向一个 block, 这样一个 double-indirect pointer 可以索引 256 * 256 => 65536 block
 
@@ -3927,7 +4209,7 @@ bmap(struct inode *ip, uint bn)
 
 ### symbolic links
 
-这部分需要让 xv6 支持符号链接, 符号链接不会修改 inode 的引用计数, 可以认为符号链接是一个文本文件, 该文本中保存了到实际文件的路径, 因此符号链接也是可以嵌套的, 特别的在这部分中 xv6 要求嵌套层数不超过 10 层
+这部分需要让 xv6 支持符号链接, 符号链接不会修改 inode 的引用计数, 可以认为符号链接是一个文本文件, 该文本中保存了到实际文件的路径, 因此符号链接也是可以嵌套的, 特别的在这部分中 xv6 要求嵌套层数不超过 10 层 -> 借助这一点避免嵌套的符号链接
 
 xv6 需要实现一个 syscall => sys_symlink, 具有两个参数 target 和 path, 即在 path 中创建一个到 target 的符号链接, 在调用 syscall 的时候 path 和 target 都不要求必须存在
 
@@ -4161,7 +4443,11 @@ struct proc {
 
 由于需要将文件映射到虚拟地址空间中, 低地址处已经被代码段, 数据段, 栈, 可扩展的堆占用了, 因此这里选择将文件映射到内存的高地址处
 
-内存地址最顶层分别为 trampoline 和 trapframe 各占一个 page, 这里将文件映射到 trapframe 以下, 虚拟内存空间资源可比物理内存资源大的多了, 因此这里在进行映射的时候直接遍历所有的 vma, 然后将当前区域映射到最靠前的 vma 之下
+内存地址最顶层分别为 trampoline 和 trapframe 各占一个 page
+
+>   xv6 的 guard page 和 kernel stack 仅保存在 kernel page table 中, 如果是 user mode 下的 virtual address, 那么最顶层只有 trampoline page (保存 trampoline.S 中的指令代码) 和 trapframe (保存寄存器状态)
+
+这里将文件映射到 trapframe 以下, 虚拟内存空间资源可比物理内存资源大的多了, 因此这里在进行映射的时候直接遍历所有的 vma, 然后将当前区域映射到最靠前的 vma 之下
 
 ```c
 // sysfile.c
@@ -4216,6 +4502,8 @@ uint64 sys_mmap(void) {
 ```
 
 这里的 access bit 是为了服务后续处理异常时进行页表映射的, 这里将 prot 翻译为 PTE 的权限位, lab 提示要调用 filedup 增加文件索引, 避免文件被释放
+
+>   上述代码还是有很多优化空间的, 比如上述的查找空闲位置, 会无脑找到当前 VMA 中地址最小的位置, 并将内容映射到最小位置以下, 其实完全可以标识一下所有空闲的地址, 并在空闲的地址中, 找到可以存储当前内容的段将内容保存在其中即可, 这种无脑向下查找其实是不稳定 -> (c++, 使用 set 维护空闲节点位置, 同时使用 map 维护空闲段即可; 如果是 c 的话可能)
 
 触发 load-page-fault 后需要将文件内容加载到内存中
 
@@ -4512,3 +4800,23 @@ fork(void)
 ```
 
 当然可以在修改之前先 merge 之前 cow lab 的修改, 这样可以更高级的 lazy allocation
+
+## one more thing
+
+*   zero copy 可以减少开销, [It’s all about buffers: zero-copy, mmap and Java NIO](https://shawn-xu.medium.com/its-all-about-buffers-zero-copy-mmap-and-java-nio-50f2a1bfc05c) -> 类似 [sendfile(2)](https://man7.org/linux/man-pages/man2/sendfile.2.html) 的 syscall 应该比较容易实现 (其实 mmap 也可以看成是 zero copy)
+
+
+
+## xv6 concurrency
+
+## lock pattern 
+
+在 file system 的 block 的设计中, buffer cache layer 层维护了多个 buf, 其中每个 buf 都持有一个 sleeplock 用来保证同时间只有一个进程可以访问当前 block, 此外对于所有的 buf 采用了 bcache lock 用来保证每个 buf 都只被缓存了一份 => one lock for the set of items and one lock per item
+
+一般而言锁会在函数内部获取, 内部释放, 但并不总是这样, 更为一般的, 锁会在一系列操作序列开头获取, 序列结尾释放, 比如在考虑到多进程调度时, 运行在当前处理器上的进行通过调用 yeild() 释放对处理器的占用, 此时获取当前进程的锁, 而随后处理器进行调度时, 会在 scheduler() 中释放当前进程的锁
+
+一般而言锁可以保证一个操作序列执行的原子性, 而在 xv6 中, 对共享变量的读和写也进行同样的保护 => 进程的信号量 killed 在读/写时都需要获取进程锁, 如果不使用锁进行保护, 那么编译器在编译时可能会将 get 函数优化为一个寄存器写的指令 (mov), 此时其他进程的写 killed 对当前读进程而言是不可见的
+
+>   因为 killed 变量仅仅涉及到读和写两种操作, 感觉完全可以通过 volatile 保护, 而不是锁
+
+*   

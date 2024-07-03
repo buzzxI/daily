@@ -312,9 +312,7 @@ lox 需要提供对面向对象的支持, 主流实现面向对象有两种方�
 
 prototype-based language 相比之下更好实现, 但代价是用户程序相对会更复杂 => [waterbed theroy](http://wiki.c2.com/?WaterbedTheory)
 
-lox 需要实现的是 class-based OOP
-
-在 lox 中定义的典型类如下:
+lox 需要实现的是 class-based OOP, 在 lox 中定义的典型类如下:
 
 ```lox
 class SomeClass {
@@ -881,7 +879,7 @@ private boolean isDigit(char c) {
 
 从解析的角度考虑, lox 支持多行字符串, lox 不会区分整数和小数, 统一使用 NUMBER 标识
 
-最后剩下的字符就是 identifier 了, lox 中的 identifier 仅支持字母和数字的组合, 不支持下划线的写法, identifier 可能为保留的关键字, 可以通过查询最开始定义的 keywords 判断得到
+最后剩下的字符就是 identifier 了, lox 中的 identifier 仅支持字母和数字的组合下划线的写法, 但 identifier 必须以一个字母开头, identifier 可能为保留的关键字, 可以通过查询最开始定义的 keywords 判断得到
 
 ## Representing Code
 
@@ -1864,16 +1862,6 @@ primary        → NUMBER | STRING | "true" | "false" | "nil" | "(" expression "
 而对于 primary 而言, 在 parser 中对于 literal 而言, 不再需要保存 token, 直接将 token 的值解析出来保存到 expression 即可
 
 ```java
-private Expr factor() {
-    Expr expr = unary();
-    while (match(TokenType.STAR, TokenType.SLASH)) {
-        Token operator = previous();
-        Expr right = unary();
-        expr = new Expr.Binary(expr, operator, right);
-    }
-    return expr;
-}
-
 private Expr unary() {
     if (match(TokenType.MINUS, TokenType.BANG)) {
         Token operator = previous();
@@ -1916,11 +1904,11 @@ requirement:
 *   report as many errors as there are: 如果 parser 很慢, 这个就更重要了, 毕竟 parse 一次时间那么长, 如果一次只报一个错, 调试起来就更慢了; 对于 parser 而言, 需要其可以在遇到一个错误后, 继续运行, parse 后边的 tokens
 *   minimize **cascaded** (级联的) errors: 代码中的错误是可能级联的, 一个地方报错, 各个地方报错 (说的就是你 vs 🤦‍♂️); 如果 parser 能够把导致一系列错误中最根源的那个检测出来, 相比调试起来的时候会方便不少吧 
 
-从某些程序上来讲, 最后两个条件很难同时实现, 即 parser 需要尽可能的给出非级联的错误
+一般而言, 最后两个条件很难同时实现, 即 parser 需要尽可能的给出非级联的错误
 
 #### panic mode
 
-当 parser 解析出错时, parser 进入 panic mode, 为了避免 parser 直接终止, parser 需要获取当前的状态信息, 并跳过一系列 tokens, 直到 token 可以用来匹配 expression rule (可以被 parser 继续解析下去)
+当 parser 解析出错时, parser 进入 panic mode, 为了避免 parser 直接终止, parser 需要获取当前的状态信息, 并跳过一系列 tokens, 直到 token 可以用来匹配 expression rule (可以被 parser 继续解析下去, 这样做的目的主要是为了让 parser 可以一次性检测到多个错误)
 
 >   parser 跳过一系列 token 的过程被称为: synchronization
 
@@ -2868,7 +2856,7 @@ fun isEven(n) {
 
 所以最终作者选择使用 runtime error 处理未定义变量
 
->   实在是 syntax error 太难实现了, 不然也不会选择 runtime error
+>   相比之下 syntax error 更难实现 (parser 检测), 不然也不会选择 runtime error (interpreter 检测)
 
 ```java
 // Environment.java
@@ -2946,9 +2934,7 @@ List<String> expressions = defineAst(args[0], "Expr",
         "icu.buzz.lox.token.Token");
 ```
 
-一个 Assignment 由一个 token 和一个 expression 组成
-
-assignment 从组成上, 可以看成一个被 `=` 分割的两部分, 有点类似二元运算符, 但又有点不同; interpreter 在遇到二元运算符时会先计算两侧的 expression, 而 interpreter 在遇到 assignment 时并不会运算 `=` 左侧的表达式
+一个 assignment 由一个 token 和一个 expression 组成, 可以将其看成一个被 `=` 分割的两部分, 有点类似二元运算符, 但又有点不同; interpreter 在遇到二元运算符时会先计算两侧的 expression, 而 interpreter 在遇到 assignment 时并不会运算 `=` 左侧的表达式
 
 >   从学名上, assignment 左侧的表达式被称为 l-value, 右侧的表达式被称为 r-value; l-value 表示了内存中的一个位置, 而 r-value 表示由 expression 计算得到的临时值, 并不占据内存中的特定位置
 
@@ -2980,7 +2966,7 @@ private Expr assignment() {
 
 >   原作者这里并没有抛出异常, 仅仅是 new 了一个异常, 作者认为 parser 不会因为这个异常进入 `confused state`, 不需要进行同步
 >
->   但我这里还是抛出了异常, 因为我认为类似 `a + b = c` 这种代码本身
+>   但我这里还是抛出了异常, 因为我认为类似 `a + b = c` 这种代码会被 parser "正确解析", 但显然这是不对的
 
 #### interpret assignment
 
@@ -3317,7 +3303,7 @@ logic_or       → logic_and ( "or" logic_and )* ;
 logic_and      → equality ( "and" equality )* ;
 ```
 
->   按照作者的意思, 他也不知道为什么 `or` 和 `and` 的优先级不同
+>   按照作者的意思, 他也不知道为什么 `or` 和 `and` 的优先级先后顺序是这么设计的
 
 后面就是之前的三步走策略: 先修改 GenerateAst, 然后修改 Parser, 最后修改 Interpreter
 
@@ -3667,19 +3653,12 @@ private Expr finishCall(Expr callee) {
     List<Expr> arguments = new ArrayList<>();
     if (!check(TokenType.RIGHT_PAREN)) {
         do {
-            if (arguments.size() >= Lox.MAX_ARGS) {
-                Lox.errorReport(peek(), "cannot have more than 255 arguments in a function call");
-            }
             arguments.add(expression());
         } while (match(TokenType.COMMA));
     }
     Token paren = consume(TokenType.RIGHT_PAREN, "a ')' is needed at the end of a function call");
     return new Expr.Call(callee, arguments, paren);
 }
-
-// Lox.java
-
-public static final int MAX_ARGS = 255;
 ```
 
 罕见的使用了 `while (true)` 的写法, 通过 break 跳出循环, 直观上这个写法可以被优化为 `while (match(TokenType.LEFT_PAREN))`, 在解析函数调用的各个参数时, 罕见的使用了 `do-while` 循环
@@ -3687,13 +3666,17 @@ public static final int MAX_ARGS = 255;
 然而 Parser 还没有完成修改, lox 需要对函数调用的参数列表的大小进行限制, lox 支持最多 255 个参数, 当参数列表过大时, parser 需要显式的进行提醒
 
 ```java
+// Lox.java
+
+public static final int MAX_ARGS = 255;
+
 // Parser.java
 
 private Expr finishCall(Expr callee) {
     List<Expr> arguments = new ArrayList<>();
     if (!check(TokenType.RIGHT_PAREN)) {
         do {
-            if (arguments.size() >= 255) {
+            if (arguments.size() >= MAX_ARGS) {
                 Lox.errorReport(peek(), "cannot have more than 255 arguments in a function call");
             }
             arguments.add(expression());
@@ -3911,7 +3894,6 @@ Parser 的实现也很简单, 所有的 function declaration 都以关键字 `fu
  private Stmt declaration() {
     if (match(TokenType.VAR)) return varDecl();
     if (match(TokenType.FUN)) return funDecl();
-    if (match(TokenType.CLASS)) return classDecl();
     return statement();
 }
 
@@ -6337,7 +6319,7 @@ clox 使用 chunk 表示字节码流
 #endif  // clox_chunk_h
 ```
 
-lox 的字节码对应了 clox 支持的各种指令, 这里使用一个枚举类型抽象各种指令, 初期之定义了返回指令 (clox 连函数调用都不支持, 这里的指令更多仅仅是占位符的作用)
+lox 的字节码对应了 clox 支持的各种指令, 这里使用一个枚举类型抽象各种指令, 初期之定义了返回指令 (目前 clox 连函数调用都不支持, 这里的指令更多仅仅是占位符的作用)
 
 ```c
 // chunk.h
@@ -6347,7 +6329,7 @@ typedef enum {
 } OpCode;
 ```
 
->   clox 并没有提供特别强大的指令集, 因此其每个指令都是 1 个字节大小
+>   clox 并没有提供特别强大的指令集, 每个字节码指令都是等长的 1 个字节大小
 
 lox 使用一个动态数组表示字节码流, 由于 c 本身不提供任何关于动态数据类型的支持, 手动封装一个可变数组
 
@@ -6488,7 +6470,7 @@ reallocate 的各个行为通过参数控制:
 
 >   目前 old_size 还没什么用, 后续可能会支持更多的操作
 
-为了保证程序的正常运行, 当 realloc 返回值为 NULL 时, os 无法分配更多的内存, 此时 clox 直接退出 (lox 作为一个应用程序, 不能处理物理内存不足的情况)
+为了保证程序的正常运行, 当 realloc 返回值为 NULL 时, os 无法分配更多的内存, 此时 clox 直接退出 (clox 作为一个应用程序, 不能处理物理内存不足的情况)
 
 ### disassemabling chunks
 
@@ -6537,9 +6519,7 @@ int disassemble_instruction(Chunk *chunk, int offset) {
     printf("%04d ", offset);
     uint8_t instruction = chunk->code[offset];
     switch (instruction) {
-        case OP_RETURN: 
-            return non_operand("CLOX_OP_RETURN", offset);
-            break;
+        case CLOX_OP_RETURN: return non_operand("CLOX_OP_RETURN", offset);
         default:
             break;
     }
@@ -6552,7 +6532,7 @@ static int non_operand(const char *name, int offset) {
 }
 ```
 
-函数 disassemble_instruction 不仅会打印当前的指令, 还会更新偏移量 (offset); 因为每个指令定义的 operand 个数不同, 因此在反编译某个指令时, 需要根据指令的类型调用不同的 helper function, 特别的对于 OP_RETURN, 不需要 operand
+函数 disassemble_instruction 不仅会打印当前的指令, 还会更新偏移量 (offset); 因为每个指令定义的 operand 个数不同, 因此在反编译某个指令时, 需要根据指令的类型调用不同的 helper function, 特别的对于 CLOX_OP_RETURN, 不需要 operand
 
 由于一般情况下不会在 main 中执行反编译, 因此这里额外定义了 debug.c 其独立于 main 存在
 
@@ -6722,11 +6702,8 @@ int disassemble_instruction(Chunk *chunk, int offset) {
     printf("%04d ", offset);
     uint8_t instruction = chunk->code[offset];
     switch (instruction) {
-        case CLOX_OP_RETURN: 
-            return non_operand("CLOX_OP_RETURN", offset);
-            break;
-        case CLOX_OP_CONSTANT:
-            return single_operand("CLOX_OP_CONSTANT", chunk, offset);
+        case CLOX_OP_RETURN: return non_operand("CLOX_OP_RETURN", offset);
+        case CLOX_OP_CONSTANT: return single_operand("CLOX_OP_CONSTANT", chunk, offset);
         default:
             break;
     }
@@ -6838,11 +6815,8 @@ int disassemble_instruction(Chunk *chunk, int offset) {
     else printf("%4d ",chunk->line_info[offset]);
     uint8_t instruction = chunk->code[offset];
     switch (instruction) {
-        case CLOX_OP_RETURN: 
-            return non_operand("CLOX_OP_RETURN", offset);
-            break;
-        case CLOX_OP_CONSTANT:
-            return single_operand("CLOX_OP_CONSTANT", chunk, offset);
+        case CLOX_OP_RETURN: return non_operand("CLOX_OP_RETURN", offset);
+        case CLOX_OP_CONSTANT: return single_operand("CLOX_OP_CONSTANT", chunk, offset);
         default:
             break;
     }
@@ -7267,18 +7241,14 @@ switch (instruction) {
 >   void second();
 >   
 >   int main(int argc, char** argv) {
->    if (1) { first(); second();};
->    else fprintf(
->   # 13 "test.c" 3 4
->                stdout
->   # 13 "test.c"
->                      , "never happen");
->    return 0;
->   }
+>           if (1) { first(); second();};
+>           else fprintf(stdout, "never happen");
+>          return 0;
+>    }
 >   ```
->
->   此时会报错为 else 缺少 if 语句, 这主要因为 if 语句通过 FUN 后面的 `;` 而被 parser 解析为一个不包含 else 的 if 语句, 导致 else 无法匹配
->
+>    
+>    此时会报错为 else 缺少 if 语句, 这主要因为 if 语句通过 FUN 后面的 `;` 而被 parser 解析为一个不包含 else 的 if 语句, 导致 else 无法匹配
+>   
 >   所以在使用 block 包裹时, 最好使用 do-while block 包裹, 保证 "invoke macro" 后的 `;` 不会带来副作用
 
 ```c
@@ -7429,8 +7399,6 @@ clox 的基本结构和 jlox 相同, 主要的区别还是在于 represent code 
 <img id="clox_pipeline" src="https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/23/11/11/20:35:58:craft_interpreter_clox_pipeline.png"></img>
 
 这一节需要实现的是 scanner, scanner 的以 source code 为输入, 生成 token, 从功能上 clox scanner 和 jlox scanner 大体上是一致的
-
-<a id="test"></a>
 
 ### spinning up interpreter
 
@@ -8412,7 +8380,7 @@ static uint16_t make_constant(Value value, Parser *parser) {
 
 >   从 emit bytes 系列的函数中就可以看到了, 在生成字节码对象时, 主要操作的是 parser 的 previous 指针; parser 使用 previous 指针表示已经被解析, 但还没有被添加到字节码流中的 token
 
-emit_constant 会在字节码指令中添加一个 constant 指令, 由于常量池大小使用两个字节限制, 在常量数量较少时仅使用 1 个字节就可以表示, 后续添加了之后需要两个字节表示, 这里在表示参数的时候使用了 little-endian, 即低地址表示地位, 高地址表示高位
+emit_constant 会在字节码指令中添加一个 constant 指令, 由于常量池大小使用两个字节限制, 在常量数量较少时仅使用 1 个字节就可以表示, 后续添加了之后需要两个字节表示, 这里在表示参数的时候使用了 little-endian, 即低地址表示低位, 高地址表示高位
 
 >   65536 是一个很高的限制了, lox 作为一个短小的语言, 支持两个字节的常量池大小已经足够了
 
@@ -8512,13 +8480,15 @@ static void unary(Parser *parser) {
 - a + b
 ```
 
-在上述表达式中 '-' 应该仅仅作用于 a, 而不是 a + b; 即在解析是认为 '-' 的优先级比 '+' 更低, 因此这里可以为 unary 添加优先级, 并在 unary 中调用 expression 时, 要求 expression 仅解析优先级不小于 unary 的部分
+在上述表达式中 '-' 应该仅仅作用于 a, 而不是 a + b; 因此这里可以为 unary 添加优先级, 并在 unary 中调用 expression 时, 要求 expression 仅解析优先级不小于 unary 的部分
 
 >   在 jlox 中, unary 不会调用 expression, 而是调用优先级不低于当前 operantor 的解析函数 -> unary 本身
 >
 >   如果 unary 可以递归调用本身的话, 那么外层 unary 操作的 operand 将是内层 unary 的运算结果; 因此 unary 是 right-associative 的 (越靠右的操作符越先解析)
 >
 >   而如果某个 operantor 递归调用的是更高优先级的解析函数, 这会使得在 expression 中出现左右两个相同的 operator 时, 先解析到左侧 operator 后, 一定不会解析到右侧的 operator, 即 left-associative
+>
+>   在 jlox 中, 所有 right-associative 的 operator 都会通过递归的方式解析, 而所有的 left-associative 的 operator 会通过迭代 (while) 的方式解析
 
 首先是优先级, clox 这里直接沿用了在 jlox 中定义的运算优先级
 
@@ -8540,9 +8510,7 @@ typedef enum {
 } Precedence;
 ```
 
-由于 c 使用整数表示枚举类型, 整数的大小也暗含了枚举对象的优先级顺序
-
-这样就可以定义一个解析包含了优先级的解析函数
+由于 c 使用整数表示枚举类型, 整数的大小也暗含了枚举对象的优先级顺序, 这样就可以定义一个解析包含了优先级的解析函数
 
 ```c
 // compile.c
@@ -8552,9 +8520,7 @@ static void parse_precedence(Precedence precedence, Parser *parser) {
 }
 ```
 
-一个函数实现的是从当前 token 开始解析, 且仅解析不低于当前优先级的部分
-
-有了这个函数, 就可以将 unary 修改为:
+一个函数实现的是从当前 token 开始解析, 且仅解析不低于当前优先级的部分, 就可以将 unary 修改为:
 
 ```c
 // compile.c
@@ -8747,6 +8713,13 @@ static void parse_precedence(Precedence precedence, Parser *parser) {
 >   这里 binding power 的说法借鉴于 [Top-Down operator precedence (Pratt) parsing - Eli Bendersky's website (thegreenplace.net)](https://eli.thegreenplace.net/2010/01/02/top-down-operator-precedence-parsing)
 
 就算对于只有一个 infix 的 expression, 也可以认为其开头和结尾包裹了两个最低优先级的 infix
+
+在 pratt parser 中, parser 在遇到了一个 left-associative operator 后: 比如 '+', '-' (两数相减), '*', '/' 在调用递归函数 parse_precedence 时会使用比当前优先级高一级的优先级 -> 可以保证在遇到后续相同的 operator 时不会继续解析下去, 而是先将 right operand 返回, 同时将运算符号加入字节码流; 而如果 parser 遇到了一个 right-associative 的 oeprator 后比如 '!', '-' (取相反数), 则在递归调用函数 parse_precedence 时会使用和当前优先级相同的优先级 -> 后续遇到相同优先级的 operator 后会继续解析下去
+
+>   简单来说, 在遇到了相同优先级的 operator:
+>
+>   * 如果希望 operand 优先和靠后的 operator 运算 (right-associative), 则应该让解析尽可能继续下去 -> 使用和当前优先级相同的参数进行递归调用
+>   * 如果希望 operand 优先和靠前的 operator 运算 (left-associative), 则应该提前返回 -> 使用比当前优先级更高的参数递归调用
 
 ## types of value
 
@@ -9114,7 +9087,7 @@ typedef enum {
 } OpCode;
 ```
 
-lox 一共支持 6 中比较类型: '==', '!=', '>', '>=', '<', '<='; 但在字节码中仅仅定义了 3 种, 这是因为这三种可以通过和 `CLOX_OP_NOT` 组合得到另外三种比较操作
+lox 一共支持 6 种比较类型: '==', '!=', '>', '>=', '<', '<='; 但在字节码中仅仅定义了 3 种, 这是因为这三种可以通过和 `CLOX_OP_NOT` 组合得到另外三种比较操作
 
 >   这种等效的操作, 可以让字节码指令集更加精简, 原作者这里这样设计的主要目的是将 lox 源码和 lox 字节码指令解耦, 二者可以具有完全不同的规范; 只要二者的执行的结果相同, 那么就是可以替换的
 
@@ -9356,13 +9329,21 @@ static inline bool isObjType(Value value, ObjType type) {
 
 对于 vm 而言, 其主要需要关心的是当前 Value 的类型, 而不是 Value 是如何管理 lox 变量运行时的, 因此这里定义了 OBJ_TYPE 用来返回当前 Obj 的类型; 
 
-不同的 Obj 类型之前也需要区分, 这里类型判断的命名方式和之前在 value.h 中相同, 其在封装时并没有直接展开, 而是使用了一个 inline 函数进一步封装, 这主要是 IS_STRING 的实现需要两次应用参数 value, 先判断当前 value 是否为 Obj 类型, 然后再判断当前 obj 是否为 string 类型; 一般而言引用两次不会有太大问题, 但考虑到宏是在预编译期间展开的, macro function 中的参数并不是真正意义上的参数, 再运行期间可能多次求值, 考虑下面这种情况:
+不同的 Obj 类型之前也需要区分, 这里类型判断的命名方式和之前在 value.h 中相同, 其在封装时并没有直接展开, 而是使用了一个 inline 函数进一步封装, 这主要是 IS_STRING 的实现需要两次应用参数 value, 先判断当前 value 是否为 Obj 类型, 然后再判断当前 obj 是否为 string 类型, 也即:
+
+```c
+#define IS_STRING(value)    (IS_OBJ(value) && OBJ_TYPE(value) == type)
+```
+
+一般而言引用两次不会有太大问题, 但考虑到宏是在预编译期间展开的, macro function 中的参数并不是真正意义上的参数, 再运行期间可能多次求值, 考虑下面这种情况:
 
 ```c
 IS_STRING(pop())
 ```
 
 macro function IS_STRING 的参数本身就是需要函数调用才能获取, 在预编译阶段展开后, 会在宏定义中进行两次求值, 即 pop 两次, 这显然和当下语义是不同的
+
+>   macro function 并不是真正意义上的 function, 写的时候可能引入很多不起眼的 bug
 
 最后的两个 AS 系列 macro 和之前定义的宏类似, 都是用来获取 Value 的取值的, 分别用来获取 Obj 对象和 Obj 中保存的字符串本身
 
@@ -9608,7 +9589,7 @@ static Obj* new_obj(ObjType type, size_t size) {
 }
 ```
 
-最后修改 vm， 使其可以通过函数 free_vm 释放对象链表
+最后修改 vm, 使其可以通过函数 free_vm 释放对象链表
 
 ```c
 // vm.c
@@ -9680,7 +9661,7 @@ static void free_obj(Obj *obj) {
 
 >   与之相对的, 如果采用 separate chain 的方式实现, 那么冲突的 entry 将构成一个单链表, 冲突的 entry 是动态创建的, 在内存中并不连续, 遍历链表的速度肯定是不如遍历数组的
 >
->   不过比较二者的查询速度, separate chain 不一定慢, 因为 open addressing 使用连续空间存储, 可能导致级联的 hash collision; 此外一般而言, separate chain 还可以通过将其转化为红黑树而优化查询时间
+>   不过比较二者的查询速度, separate chain 不一定慢, 因为 open addressing 使用连续空间存储, 可能导致级联的 hash collision; 此外一般而言, separate chain 还可以通过将其转化为红黑树而减少查询次数
 
 由于采用了 open addressing 的方式解决 hash collision, 显然 hash table 的容量就是受限的, 且随着不断向 hash table 中填充 entry, 碰撞的概率也会越来越大, 因此这里也使用了 load factor, 在 table 被填满之前就返回
 
@@ -9994,7 +9975,7 @@ static Entry* find_entry_by_hash(StringObj *key, Entry *entries, int size) {
 
 当 find_entry_by_hash 遍历到一个 tombstone 时, 不会停止， 而是继续遍历下去, find_entry_by_hash 会标记其找到的的一个 tombstone (一般而言返回的 tombstone 都是为了后续填充使用的)
 
->   原书实现的 find_entry_by_hash 最外层是一个 infinite loop, 因此后面还考虑到 tombstone 对于 load factor 的影响, 这里直接通过循环次数, 可以直接把 tombstone 当成是 empty bucket
+>   原书实现的 find_entry_by_hash 最外层是一个 infinite loop, 由于后面还考虑到 tombstone 对于 load factor 的影响, 这里直接通过循环次数, 可以直接把 tombstone 当成是 empty bucket
 
 ### string intern
 
@@ -10160,7 +10141,7 @@ declaration    → varDecl
                | statement ;
 ```
 
-此后一个 lox 程序会被认为是一个 declaration
+此后一个 lox 程序会被认为是一系列 declaration 的集合
 
 ```c
 // compiler.c
@@ -10389,11 +10370,7 @@ static void var_declaration(Parser *parser) {
 }
 ```
 
-compiler 首先会将解析到的 identifier 以字符串的形式添加到常量池中, 随后将 initializer 添加到字节码流中
-
-initializer 通常是一个 expression, 其结果会保存在栈中, 最后将 define 指令添加到字节码流中, 表示使用刚刚保存在栈中的结果初始化当前变量
-
->   这里也可以看到, lox 字节码中, 操作数通常位于操作之前, 这种紧密的格式也使得对于某个操作, 其操作数是位于 vm stack 栈顶的 (至少在添加 local variable 之前是这样的)
+compiler 首先会将解析到的 identifier 以字符串的形式添加到常量池中, 随后将 initializer 添加到字节码流中, 最后才将 global variable 在常量池中的下标添加到字节码流中: 一个 var_declaration 之后, 字节码流具有如下结构: [previous code | initializer expression/nil | CLOX_OP_DEFINE_GLOBAL | constant pool index]
 
 ```c
 // chunk.h
@@ -10423,6 +10400,8 @@ switch (instruction) {
 >   lox 允许 global variable redefinition, 因此在定义 global variable 时, 并没有检查 global variable 是否已经存在了
 
 vm 在遇到了 define_global 指令时, 会将 global variable 和 value 绑定, 由于是 global 的, 在 vm 中定义了另外一个 hash table, 专门保存
+
+>   在 jlox 中会直接将 global variable 保存在 environment 中 (本质上也是一个 hash table)
 
 ```c
 // vm.h
@@ -10470,9 +10449,7 @@ switch (instruction) {
 
 ### read variable
 
-在 assign 之前, 可以认为, 所有不以 var 为前缀的 identifier, 都是 read variable
-
-read variable 和 read string, read number 并没有什么区别, 都是 expression 中最小的, 具有最高优先级的部分
+在 assign 之前, 可以认为, 所有不以 var 为前缀的 identifier, 都是 read variable, identifier 和 literal 相同, 在 expression 中具有最高优先级
 
 ```c
 // compiler.c
@@ -10481,7 +10458,6 @@ ParserRule rules[] = {
     [CLOX_TOKEN_IDENTIFIER]    = { variable, NULL,    PREC_PRIMARY },
 };
 
-
 static void variable(Parser *parser) {
     uint16_t idx = make_constant(OBJ_VALUE(new_string(parser->previous->lexeme, parser->previous->length)), parser);
 	if (idx > UINT8_MAX) emit_bytes(parser, 3, CLOX_OP_GET_GLOBAL_16, idx & 0xff, idx >> 8);
@@ -10489,9 +10465,11 @@ static void variable(Parser *parser) {
 }
 ```
 
-类似的首先需要将 identifier 保存在常量池中, global variable 的 definition 和 usage 在文本中的顺序是不确定的, 常量池中的 value 的下标可能是不同的
+要注意的是这里将字符串添加到常量池中时, 没有考虑到当前变量已经存在在常量池中的情况, 因此可能存在常量池中不同下标但相同 value 的情况 -> 这其实也是可以优化的点, 使用常量池保存 immutable variables, 进一步压缩常量池的空间, 提高 special locality
 
 >   之前通过 string intern, 保证了字符串只会在 clox vm 中保存一份, 但同一个字符串引用可能使用了多独立的, 不同的 value 包裹, 即常量池中会出现不同下标的 value, 但索引的字符串相同的情况
+
+在加入该指令后 chunk instruction 有如下格式: [previous code | CLOX_OP_GET_GLOBAL | constant pool index]
 
 ```c 
 // chunk.h
@@ -10569,6 +10547,8 @@ typedef enum {
     CLOX_OP_SET_GLOBAL_16,
 } OpCode;
 ```
+
+在一个 variable assignment 之后, chunk instruction 具有如下格式: [previous code | expression | CLOX_OP_SET_GLOBAL | constant pool index]
 
 一般而言都是通过一个 expression 对一个 identifier 进行 set, 在 compiler 中肯定是先解析到 '=' 再解析后续 expression, 还是一样的, 为了符合 lox 字节码的规则, 将 operand (expression) 放在 operator (identifier) 之前
 
@@ -10838,7 +10818,9 @@ static void end_scope(Compiler *compiler) {
 
 按照之前的想法, 在 block 中声明的 variable 会将 initializer (expression) 的结果保存在栈中, 在 block 结束后再弹栈, 所以这里 block 结束后, 将之前一个 block 中声明的所有 variable 弹栈
 
-这里引入了一个新的操作码, 它具有一个 operand, 表示需要弹栈的数量
+在 compiler 中, 所有的 local variable 都会保存在 resolver 的 local stack 中, 这里主要起到 name binding 的作用; 而实际在 vm 中运行时, 各个 local variable 在 declaraction 时都会被加载到 vm stack 中, 因此一个 block 结束后, 需要将当前 block 中通过 variable declaration 引用的 local varaible 弹出 vm stack 
+
+这里引入了一个新的操作码, 它具有一个 operand, 表示需要弹栈的 Value 的数量
 
 ```c
 // chunk.h
@@ -10995,6 +10977,12 @@ static void var_declaration(Compiler *compiler) {
     else global_declaration(compiler);
     consume(CLOX_TOKEN_SEMICOLON, "Expect ';' after variable declaration.", compiler->parser);
 }
+```
+
+是否 global 的标志在于当前 compiler 所在的 block 深度, 如果当前深度大于 0, 那么当前 variable 一定是在某个 block 内部定义的, 此时执行 local_declaration, 否则执行 global_declaration
+
+```c
+// compiler.c
 
 static uint16_t declare_global(Parser *parser) {
     Token *identifier = parser->previous;
@@ -11019,13 +11007,11 @@ static void define_global(Parser *parser, uint16_t idx) {
 }
 ```
 
-是否 global 的标志在于当前 compiler 所在的 block 深度, 如果当前深度大于 0, 那么当前 variable 一定是在某个 block 内部定义的, 此时执行 local_declaration, 否则执行 global_declaration
+整个 global declaration 的流程和上面提到的相同, 先 declare (将 identifier 添加到常量池), 然后 initialize (通过解析 expression 的方式将 initializer 添加到字节码中), 最后 define (将常量池下标添加到字节码中)
 
-整个 global declaration 的流程和上面提到的相同, 先 declare(添加到常量池), 然后 initialize(将 expression 添加到字节码中), 最后 define(将常量池下标添加到字节码中)
+>   这里进行的函数抽取, 其实是为了兼容 local_declaration
 
-整体流程和之前的 var_declaration 完全相同, 只不过进行了函数抽取, 这种看起来更加复杂的写法其实是为了兼容 local_declaration
-
-local_declaration 的流程和 global_declaration 完全相同
+local_declaration 的流程和 global_declaration 完全相同, 但具体的执行细节存在些许差异
 
 ```c
 // compiler.c
@@ -11064,6 +11050,8 @@ static bool token_equal(Token *a, Token *b) {
 ```
 
 在声明变量的时候首先需要检查一下当前 'stack' 的大小 (2 个字节的大小已经很大了), 在 'stack' 足够大的情况下, 还需要检查一下当前深度的 scope 中是否存在同名的 variable, 这里采用最暴力的线性搜索, 按照 token 长度挨个字符比较
+
+>   注意这里比较 local variable 的方式是通过比较 token 实现的, 因为只有 global varaible 才能被保存在 constant pool 中 (vm 的 global hash table 中), 这里的 local variable 只是保存在了 local stack 中
 
 在 'stack' 足够大, 且当前深度中没有同名的 variable 的情况下, 在 "栈顶" 分配一个 slot, 注意到这里首先将深度标记为 -1, 表示此时 variable 还不可用, 后面解释写成 -1 的原因
 
@@ -11133,7 +11121,7 @@ static int resolve_local(Compiler *compiler, Token* token) {
 }
 ```
 
-任何 variable 首先会被认为是 local variable, compiler 会遍历 'stack', 查询当前解析的 identifier 是否属于某个 Local, 注意到这里对 local 的 depth 进行了判断, 如果 depth 为 -1, 即认为 variable 使用自己对自己进行了初始化, 再考虑一遍下面的例子:
+任何 variable 首先会被认为是 local variable, resolver 会遍历 local stack, 查询当前解析的 identifier 是否是 local variable, 注意到这里对 local variable 的 depth 进行了判断, 如果 depth 为 -1, 即认为 variable 使用自己对自己进行了初始化, 再考虑一遍下面的例子:
 
 ```lox
 {
@@ -11158,7 +11146,9 @@ variable 函数需要处理的 identifier 可能为 local/global (通过 resolve
 
 >   macro 中通过 '##' 将参数拼接得到字节码 (枚举类型)
 
-然后就是让 vm 支持上面新定义的 opcode 了
+对 local variable 的 setter 和 getter 进行解析后, 字节码流变为了: [previous code | CLOX_OP_GET/SET_LOCAL | local stack index], 字节码流以 local variable 在 vm stack 中存储的位置作为下标
+
+然后是让 vm 支持上面新定义的 opcode 了
 
 ```c
 // vm.c
@@ -11269,7 +11259,6 @@ static void if_statement(Compiler *compiler) {
 
 ```c
 // compiler.c
-
 
 static void if_statement(Compiler *compiler) {
     consume(CLOX_TOKEN_LEFT_PAREN, "Expect '(' after 'if'.", compiler->parser);
@@ -11453,7 +11442,9 @@ static void and(Compiler *compiler, bool assign) {
 
 注意到这里在调用 parse_precedence 时使用相同优先级, 即 compiler 会认为 logical operator 是 right-associative 的, 一次性完成级联的 logical operator 的解析
 
->   一次性完成所有级联 logical operator 的解析正好是 vm 需要的, 这样在左式为 false 时, 直接跳转到的地方一定是 logical expression 结束后的第一个语句
+>   一次性完成所有级联 logical operator 的解析正好是 vm **需要的**, 这样在左式为 false 时, 直接跳转到的地方一定是 logical expression 结束后的第一个语句
+>
+>   一般而言将 logical operator 解析为 left-associative 还是 right-associative 都是可以的, 只不过 right-associative 可以在 left operand 为 false 时直接完成跳转
 
 此外如果 left operand 是 true, 那么其对于 and 是没有任何增益的, 此时直接将 left operand 弹栈即可
 
@@ -11583,7 +11574,7 @@ static void emit_loop(Parser parser, int start) {
 }
 ```
 
->   向前跳总比向前跳简单多了, 至少不需要分为两个阶段, 直接就可以计算需要跳转到的位置
+>   向前跳总比向后跳简单多了, 至少不需要分为两个阶段, 直接就可以计算需要跳转到的位置
 
 vm 需要提供对新指令的支持:
 
@@ -11682,7 +11673,7 @@ static void for_statement() {
 }
 ```
 
-在 left paren 后如果找不到一个 ';' 会认为当前 for statment 包含了一个 initializer, 前面也说过了, for statment initializer 可能是一个 variable declaration, 还可能是一个 expression
+在 left parentheses 后如果找不到一个 ';' 会认为当前 for statment 包含了一个 initializer, 前面也说过了, for statment initializer 可能是一个 variable declaration, 还可能是一个 expression
 
 注意到这里在进行匹配的时候调用了 expression_statement, 这不仅仅会解析 initializer, 还会消耗后续的 ';', 而如果考虑不带 initializer 的情况, 此时在 if 中的 match 函数就会将后续的 ';' 及时消耗掉, 因此在添加了 initializer 后, 就不需要再使用 consume 消耗后续的 ';' 了
 
@@ -11759,7 +11750,9 @@ static void for_statement() {
 
 increment 相对比较复杂, 因为 increment 是在每个 loop body 的结尾执行的, 而在代码中 increment 的解析又是优先于 body 的, 因此 increment 先天就需要通过依赖跳转实现
 
-control flow 在经过 condition 后无条件的掠过 increment, 跳转到 loop body, 而在 loop body 中又需要无条件跳转到 increment 中, 执行完 increment 后, 又需要无条件跳转到下一轮的 condition 中:
+control flow 在经过 condition 后无条件的掠过 increment, 跳转到 loop body, 而在 loop body 中又需要无条件跳转到 increment 中, 执行完 increment 后, 又需要无条件跳转到下一轮的 condition 中
+
+>   为什么不把 increment 放在循环体结尾呢, 因为在代码顺序上, increment 在 for-loop body 之前, 因此在进行 loop 解析之前, increment 的解析就已经完成了
 
 更为具体的, 在字节码中具有如下结构:
 
@@ -11827,6 +11820,8 @@ static void for_statement() {
 
 对于 vm 而言, function 就是一个包含了各个指令的字节码流, 函数调用就是从当前正在执行的字节码指令跳转到对应函数中的字节码流中, 而函数返回就是从特定的字节码流回到当前 "主程序" 所在的字节码流中
 
+>   从某些程度上, 可以将 "主程序" 看成是 main 函数本身, 剩下应用程序定义的函数都是在最外层的 "main" 函数中定义的嵌套函数
+
 所以除了 lox 程序执行的先后顺序之外, lox 的主程序和 function 是相同的, 保存了各个指令序列, vm 根据 pc 指针, 从头扫描各个指令, 并执行
 
 clox 将各个 function 抽象为一个 object:
@@ -11848,6 +11843,8 @@ struct FunctionObj {
 ```
 
 和之前的 StringObj 类似的, 通过将 struct 中第一个字段定义为 Obj 类型, 使得 FunctionObj "继承" Obj, 具有一个 type 属性; 此外根据前面的描述, function 应该包含了执行的字节码流, 因此 function 包含了 chunk 保存各个字节码指令
+
+>   从这里的定义可以看到, clox 的常量池是函数级别的, 即每个函数具有自己的常量池信息
 
 此外 function 还具有一个参数列表, 在 FunctionObj 这里仅仅定义了 arity 表示参数个数, 根据之前 jlox 实现的经验, 每个函数并不需要保存具体参数的名称, 保存参数个数就行了
 
@@ -12073,11 +12070,13 @@ vm 在调用某个函数后, 并不能明确该函数在 vm stack 中保存的�
 
 这也是 vm 需要改进的地方, vm 后续不会再根据绝对索引访问 stack 中的 local variable, 所有的索引都是相对于 function call 发生时相对 sp 的位置而言的
 
+>   这其实也是可以遇见的, 毕竟显然 resolver 已经和 function 一一对应了, 在 function 内部声明的 local varaible 在 resolver local stack 的开头, 那么显然在 vm 运行时, local variable 也应该在 "function stack" 的开头
+
 #### return address
 
 vm 每次执行 pc 执行的字节码指令, 根据前面 vm 实现 control flow 的经验, 直接修改 pc 的值即可实现跳转, 同样也可以实现函数调用; 然而真正麻烦的是函数返回, 当程序 control flow 跳转到另一个 function 并执行完后, 需要跳转回到当前位置
 
-更麻烦的是函数可以递归调用, 这意味着调用同一个函数的返回地址可能是不同的, 在程序运行之前 compiler 不能再像之前那样利用 patch 技巧
+更麻烦的是函数可以递归调用, 这意味着调用同一个函数的返回地址可能是不同的, 在程序运行之前 compiler 不能再像之前那样利用 patch 技巧 -> 同一个函数的 return address 和运行时调用位置有关
 
 这里修改了 vm 的执行结构, clox 认为每个函数都是一个 frame (包括 lox 入口函数 script), 由于函数调用的关系正好可以构成一个栈结构, 因此 lox 程序在 vm 中以 call frame stack 的形式存在
 
@@ -12107,7 +12106,7 @@ typedef struct {
 } VM;
 ```
 
-vm 使用之前保存 local variable stack 的方式保存 frame stack, 每当发生函数调用时, 一个新的 frame 入栈, 当函数返回时, frame 出栈; 通过这种方式, 这种实现等价于将返回地址保存在 caller frame (调用者栈帧) 中
+vm 使用之前保存 local variable stack 的方式保存 frame stack, 每当发生函数调用时, 一个新的 frame 入栈, 当函数返回时, frame 出栈; 通过这种方式, 这种实现等价于将返回地址保存在 caller frame (调用者栈帧) 中 (更准确的来说是将 return address 保存在了 caller frame 的 pc 上)
 
 >   在很多语言中, 函数返回地址都保存在了 callee frame (被调用者栈帧) 中 
 
@@ -12232,7 +12231,9 @@ InterpreterResult interpret(const char *source) {
 
 ```
 
-这里不仅仅将 entry function 加入了 frame stack, 还将其保存在了 local variable stack, 这里应该是 lox 原作者的小癖好 ?
+这里不仅仅将 entry function 加入了 frame stack, 还将其保存在了 local variable stack
+
+>   在后续的章节中可以看到, function stack 中 slot 0 位置保存的 Value 就是当前的 FunctionObj
 
 ### function declaration
 
@@ -12271,6 +12272,11 @@ static void function_declaration() {
 
 函数 function 的作用是解析函数体, 这里先不用管, 除了这个函数之外, function declaration 和 variable declaration 几乎完全一致, 这里主要的区别在于, 当 function 是一个 local 时, function 需要先完成 function 的 definition, 因为尽管变量不允许使用自己初始化自己, 但 local function 允许在 function 内部调用自己 => 递归调用
 
+>   注意到在解析 global function 和 inner function 时, 操作是不同的:
+>
+>   *   对于 global function 会将当前 FunctionObj 添加到常量池中, 因此字节流有如下形式: [previous code | CLOX_DEFINE_GLOBAL | constant index], 因为 define global 会从栈上取出一个 Value 添加到常量池中, 因此 define_global 必须在 function 后面
+>   *   而 local function 最终就是将一个 FunctionObj 放在 vm stack 上, 因此 define_local 放在了 function 前面
+
 在 lox 中 free_resolver 的返回值是一个 FunctionObj, 将整个 lox 程序认为是一个大的 FunctionObj, 那么 lox 中的每个 "子函数" 返回的也应该是一个 FunctionObj
 
 compiler 在解析 "子函数" 时, 最后得到的也应该是一个 FunctionObj, 显然在遇到一个子函数时, 提前 free_resolver 不太合适, 这里 lox 将 resolver 定义为嵌套关系, 每当解析到 function declaration 后, 使用一个 inner resolver 覆盖 current resolver
@@ -12303,7 +12309,7 @@ static void function(FunctionType type) {
 }
 ```
 
-和 jlox 类似的, lox 定义的函数支持的参数个数是有限的, 这里限制最多不超过 255 个参数
+和 jlox 类似的, lox 定义的函数支持的参数个数是有限的, 这里限制最多不超过 255 个参数; function 的解析中, 会将 parameter 解析为 local variable 并压入 local stack 中
 
 为了维护嵌套关系, 每个 resolver 还需要记录上一层的 resolver
 
@@ -12357,7 +12363,6 @@ static FunctionObj* free_resolver() {
     Resolver *resolver = current_resolver;
     current_resolver = current_resolver->enclose;
     if (current_resolver != NULL) {
-        // emit closure instruction
         uint16_t idx = make_constant(OBJ_VALUE(function));
         if (idx > UINT8_MAX) emit_bytes(3, CLOX_OP_CONSTANT_16, idx & 0xff, idx >> 8);
         else emit_bytes(2, CLOX_OP_CONSTANT, idx);
@@ -12369,6 +12374,8 @@ static FunctionObj* free_resolver() {
 ```
 
 在 free_resolver 中, 通过 OP_CONSTNAT 的方式将 FunctionObj 保存在 vm stack 中, 因为不管是 local function, 还是 global function, 都需要将 function 保存在 vm 中 (如果是 global 的话, 后续会弹栈并将 function 以键值对的形式保存在 global map 中)
+
+值得注意的是, function parameter 的压栈操作放在了 begin_scope 后, 因此在 function declaration 的 end_scope 后, vm stack 的栈顶上就只剩下 FunctionObj 本身了, 而在 free_resolver 中, FunctionObj chunk 的最后一个指令是将 nil 压入栈, 因此一个函数结束后, vm stack 栈顶为返回值, 下面为一个 FunctionObj
 
 ### function call
 
@@ -12483,11 +12490,9 @@ static bool invoke(FunctionObj *function, uint8_t arg_cnt) {
 }
 ```
 
-由于函数存在递归调用的情况, 所以在将新的函数压入调用栈之前首先对当前调用深度进行了检查, 如果当前的栈帧个数超过了限制, 那么 clox 会报告 stack overflow
+由于函数存在递归调用的情况, 所以在将新的函数压入调用栈之前首先对当前调用深度进行了检查, 如果当前的栈帧个数超过了限制, 那么 clox 会报告 stack overflow, 随后执行参数个数的判断
 
-随后执行参数个数的判断, compiler 在解析到 function declaration 时将函数参数个数保存在 FunctionObj 中, 而 compiler 在解析到 call 
-
-否者的话, clox 会将当前 FunctionObj 压入调用栈, 在 CallFrame 上额外添加一个 frame, 由于每个 FunctionObj 基于自己的 pc 指针, 函数入栈后需要让 pc 指针指向新函数的第一条指令
+vm 在 CallFrame 上额外添加一个 frame, 由于每个 FunctionObj 基于自己的 pc 指针, 函数入栈后需要让 pc 指针指向新函数的第一条指令
 
 compiler 在解析 function body 时, 其 local variable 都是相对于当前函数所在的 Resolver 而言的, 因此 vm 将 frame 压入 CallFrame 之后, 需要让当前函数的 local stack (slots) 指向 vm stack 中 FunctionObj 所在的 slot
 
@@ -12600,6 +12605,8 @@ static void return_statement() {
 从语法上 lox 不支持在顶层 script 中使用 return 返回, 通过 resolver 的绑定关系 compiler 可以在编译阶段就发现这个错误
 
 剩下的就和之前的函数没有任何区别了, 函数的返回值将通过 expression 的方式保存在 vm stack 中
+
+注意到这里并没有修改函数 free_resolver, 这意味着如果当前 lox 函数通过主动的 return 返回了, 当前 FunctionObj 的 chunk 中的结尾还是会隐式的包含一个 nil 的返回值 (vm 不会执行到这个指令, 所以 vm stack 中还是只有一个真正的返回值)
 
 ### native function
 
@@ -12781,13 +12788,15 @@ var closure = makeClosure();
 closure();
 ```
 
-显然目前 clox 也不支持 closure 特性, 当 makeClosure 结束后, vm stack 中保存的 'local' 不再有效, 会被后续其他的 local variable 覆盖
+显然目前 clox 也不支持 closure 特性, 当 makeClosure 结束后, 但要注意的是在 closure 的声明可以被正常执行, 并且可以进行函数调用, 只不过在执行 closure() 调用时, 会因为找不到 global variable 而报错
+
+>   能进行函数调用要多亏了将 FunctionObj 抽象为 ObjValue, 这样可以正常返回并完成 closure 变量的声明
 
 ### closure object
 
-在此之前, lox function 被 compiler 看成是一个 FunctionObj, 并保存在该 function declaration 上下文的常量池中, vm 在运行时直接从常量池中获取一个 FunctionObj, 并执行
+在此之前, lox function 被 compiler 看成是一个 FunctionObj, 并将其保存在 vm stack 中, 如果当前 scope 为 global, 则会将 FunctionObj 添加到常量池中, 而如果 scpoe 为某个 local, 则会直接被保存在当前的 vm stack 中
 
-而因为当前函数的执行可能需要依赖外层函数的某个 local variable, 每次函数运行时这些 local variable 的取值可能是不同的, 所以实际在 vm 中运行的函数, 并不能完全在编译期间确定, 比如:
+在考虑了 closure 后, 当前函数的执行可能需要依赖外层函数的某个 local variable, 每次函数运行时这些 local variable 的取值可能是不同的, 所以实际在 vm 中运行的函数, 并不能完全在编译期间确定, 比如:
 
 ```lox
 fun makeClosure(value) {
@@ -13008,7 +13017,7 @@ vm stack 使用数组实现, 当 inner function 访问 outer function 的 local 
 
 这就需要 vm 可以将 function 中定义的各个 local variable 分为两类, 一类是没有被任何 inner function 引用的 variable, 这部分直接弹栈即可; 第二类是被 inner function 引用的 variable, 在弹栈之前, 要先保存一份在堆区中
 
-不过值得庆幸的是, 在编译阶段, inner function 对 outer function 中的 local variable 的引用是可以被 compiler 正常识别的 (尽管目前 inner function 会将保存在 outer function 中的 local variable 解析为一个 global varaible), 这意味着在 vm 弹栈的时候, 可以直接根据 compiler 的编译结果进行区分 local variable 的类型 
+不过值得庆幸的是, 在编译阶段, inner function 对 outer function 中的 local variable 的引用是可以被 compiler 正常识别的 (尽管目前 inner function 会将保存在 outer function 中的 local variable 解析为一个 global varaible), 这意味着在 vm 弹栈的时候, 可以直接根据 compiler 的编译结果进行区分 local variable 的类型
 
 #### compile upvalue
 
@@ -13080,7 +13089,7 @@ struct FunctionObj {
 
 注意到 resolver 使用了一个 upvalue 数组动态维护编译过程中遇到的各个 upvalue 引用, 这里没有使用一个固定大小的数组主要是为了避免一个 Resolver 结构体过大
 
-其中每个 UpValue 有两个字段, idx 和 is_local, 在 resolver 中, 使用一个 upvalues 数组保存 inner function 中引用的各个存在于 outer function 的 local varaible, 注意到这里并没有将 upvalues 的个数保存在 resolver 中, 而是放在了 FunctionObj 中, 主要原因在于; 另外一个字段 is_local 用来表示 upvalue 是否为引用自当前 inner function 的第一个 outer function, 考虑到下面的情况:
+其中每个 UpValue 有两个字段, idx 和 is_local, 在 resolver 中, 使用一个 upvalues 数组保存 inner function 中引用的各个存在于 outer function 的 local varaible, 注意到这里并没有将 upvalues 的个数保存在 resolver 中, 而是放在了 FunctionObj 中; 另外一个字段 is_local 用来表示 upvalue 是否为引用自当前 inner function 的第一个 outer function, 考虑到下面的情况:
 
 ```lox
 fun outer() {
@@ -13188,6 +13197,12 @@ static int add_upvalue(int local, bool is_local, Resolver *resolver) {
 ```
 
 在一个 inner function 中可能存在多个针对相同 upvalue 的 reference, compiler 并不会为每个 upvalue 都分配一个 slot, 而是进行复用, 因此在添加 upvalue 之前, resolver 先进行 upvalue 的检索, 在找到了相同的 upvalue 时, 直接返回之前的结果即可
+
+>   可以看到 resolver 中的 upvalue 是针对 inner function 而言的, upvalue 保存了当前 inner function 引用的 variable;
+>
+>   如果还存在 mid function, 那么 inner function 的 upvalue 的 is_local 字段会被置为 false, 而 mid function 的 upvalue 的 is_local 字段被置为了 true
+>
+>   is_local 字段的意思是当前 variable 是否为当前 function 外侧 function 的 inner function
 
 capture upvalue 的行为发生在运行时, 当 vm 解析到一个 function declaration 后, 会将其抽象为 ClosureObj 对象, vm 不仅仅需要知道该函数的 chunk code, 还需要保存该函数引用的各个 upvalue, 因此在 free resolver 的时候, 不仅仅需要返回一个 FunctionObj 对象, 还需要保存在函数体内声明的各个 upvalue
 
@@ -13393,7 +13408,7 @@ void free_obj(Obj *obj) {
 
 >   由于 ClosureObj 额外管理了 upvalues 数组, 这里在释放的时候也需要将其及时释放
 
-有了 UpvalueObj 在 vm 运行时再遇到, OP_CLOSURE 就可以将 compiler 解析好的 upvalue 保存到 ClosureObj 中了
+有了 UpvalueObj 在 vm 运行时再遇到, CLOX_OP_CLOSURE 就可以将 compiler 解析好的 upvalue 保存到 ClosureObj 中了
 
 ```c
 // vm.c -> run
@@ -13575,7 +13590,7 @@ UpvalueObj* new_upvalue(Value *slot) {
 }
 ```
 
-不仅如此, 引用了相同的 local variable 的 upvalue 将不会重复创建 upvalue, 直接返回即可
+不仅如此, 引用了相同的 local variable 的 upvalue 将不会重复创建 upvalue, 直接返回即可 (这里说的引用了相同的 local variable 是针对 mid function 和 inner function 的 upvalue 而言的)
 
 当某个 local variable 弹栈时, 所有引用了深度不小于当前 local variable 的 upvalue 都需要完成从 open 到 close 的转化:
 
@@ -13596,7 +13611,7 @@ static void close_upvalue(Value *slot) {
 
 close upvalue 占用的堆区空间已经在 new_upvalue 的时候分配在 UpvalueObj 内部了, 因此这里的转化也仅仅是对 close 的分配, 由于 vm 实际使用 upvalue 时使用的是 location 指针, 因此这里还需要同步 location 指针指向堆空间 (close)
 
-在 end_scope 中, compiler 根据 local variable 是否被 captured, 生成 OP_CLOSE_UPVALUE 和 OP_POP, 这里在遇到一个 OP_CLOSE_UPVALUE 时, 在进行一次 close_upvalue 后执行弹栈
+在 end_scope 中, compiler 根据 local variable 是否被 captured, 生成 CLOX_OP_CLOSE_UPVALUE 和 CLOX_OP_POP, 在遇到一个 CLOX_OP_CLOSE_UPVALUE 后, 先进行一次 close_upvalue 后执行弹栈
 
 ```c
 // vm.c -> run
@@ -13876,7 +13891,7 @@ static void mark_roots() {
 }
 ```
 
-按照之前的说法, 所有位于 vm stack 中的 value, 所有保存在 global 中的各个 entry 均为 root
+按照之前的说法, 所有位于 vm stack 中的 value, 所有保存在常量池中的各个 entry 均为 root
 
 由于 vm stack 本质上是一个 Value 数组, lox 的基本数据类型都是值传递的, 不涉及到堆内存分配, 因此这里的 mark_value 仅标记 Obj 类型的 value
 
@@ -13944,6 +13959,8 @@ void mark_compiler_roots() {
 >   实际中分配的内存可能有各种用途, 而 GC 可以回收的内存仅限于各个 lox 对象 (vm 的 objs 链表); 这就意味着, 可能当前仅仅是为了分配一个动态数组, 却触发了 GC, 此时却意外的回收了未标记的 Obj
 >
 >   最典型的例子就是 FunctionObj, 在编译阶段, compiler 会不断产生字节码, 使得 chuck 数组不断动态扩容, 而扩容可能导致当前 FunctionObj 被意外清除
+>
+>   实际上, 目前为止 compiler 不仅仅会创建 FunctionObj, 还可能创建 StringObj, 而 StringObj 也是需要被标记的, 后面说得到 bug 的时候会说明
 
 ### trace references
 
@@ -14657,7 +14674,7 @@ typedef enum {
 } OpCode;
 ```
 
-目前在 class_declaration 中, compiler 会将 identifier 保存在常量池中, 并通过 OP_CLASS 保存常量池索引, 由于目前 ClassObj 的 "构造函数" 中只需要一个 StringObj 作为类名即可, 因此这里只要能保存 identifier 就可以构造一个 ClassObj
+目前在 class_declaration 中, compiler 会将 identifier 保存在常量池中, 并通过 CLOX_OP_CLASS 保存常量池索引, 由于目前 ClassObj 的 "构造函数" 中只需要一个 StringObj 作为类名即可, 因此这里只要能保存 identifier 就可以构造一个 ClassObj
 
 随后根据当前 compiler 所在 scope 的深度, 选择将 class 保存在 local 或 global 中
 
@@ -14665,7 +14682,7 @@ typedef enum {
 >
 >   因此不管是 global 还是 local 的, 后续在使用 ClassObj 时都需要重新 reload 
 
-interpreter 在遇到 OP_CLASS 后会根据常量池中获取的 StringObj 创建一个 ClassObj 并保存在 vm stack 中
+interpreter 在遇到 CLOX_OP_CLASS 后会根据常量池中获取的 StringObj 创建一个 ClassObj 并保存在 vm stack 中
 
 ```c
 // vm.c -> run
@@ -14854,7 +14871,7 @@ switch (instruction) {
 }
 ```
 
-在 vm 执行时, 首先会通过 CLOX_OP_GET 将 `.` 在左式保存在 vm stack 中, 随后解析到 GET/SET_PROPERTY; 特别的对于 CLOX_OP_SET_PROPERTY compiler, 首先将 expression 的结果保存在 vm stack 中, 因此在解析到 SET 指令的时候, vm stack 栈顶为 expression 的结果, 而 InstanceObj 在栈顶的下的后一个 slot; 而对于 CLOX_OP_GET_PROPERTY 栈顶保存的就是 InstanceObj 了
+在 vm 执行时, 首先会通过 CLOX_OP_GET 将 `.` 在左式 (InstanceObj) 保存在 vm stack 中, 随后解析到 GET/SET_PROPERTY; 特别的对于 CLOX_OP_SET_PROPERTY, compiler 首先将 expression 的结果保存在 vm stack 中, 因此在解析到 SET 指令的时候, vm stack 栈顶为 expression 的结果, 而 InstanceObj 在栈顶的下的后一个 slot; 而对于 CLOX_OP_GET_PROPERTY 栈顶保存的就是 InstanceObj 了
 
 ```c
 // vm.c -> run
@@ -14900,6 +14917,8 @@ case CLOX_OP_SET_PROPERTY: {
 ```
 
 不管是 SET 语句还是 GET 语句, vm 执行结束后, vm stack 栈顶保存的都是被 SET 或者需要 GET 的 Value (所有的 InstanceObj 都会被弹栈)
+
+>   这其实也是老传统了, 考虑表达式: a = b = c + d, 在执行结束后, a 和 b 均被赋值为 c + d
 
 ### method bind
 
@@ -14948,7 +14967,7 @@ case OBJ_CLASS: {
 
 所有的方法都定义在类型声明中, 因此 compiler 需要在函数 class_declaration 中对方法声明进行编译
 
-由于 lox 中没有成员变量, 在 lox class declaration 中的每个语句都是一个 method declaration, 和一般的语句一样, 每个 method declaration 以一个 ';' 结尾
+由于 lox 中没有成员变量, 在 lox class declaration 中的每个语句都会被识别为 method declaration
 
 这里要注意的是, method 和 function 最主要的区别在于 method 需要绑定一个 class name, 因此在声明方法之前, 首先需要将 ClassObj 放在当前栈的栈顶
 
@@ -15100,8 +15119,6 @@ case OBJ_METHOD: {
 }
 ```
 
-
-
 对于 compiler 而言, 不需要对 method reference 和 fields 进行区分, 在 vm 中, 原来的逻辑是:
 
 ```c
@@ -15200,11 +15217,9 @@ static void this(bool assign) {
 }
 ```
 
-在解析 this 关键字的时候, 本质上还是将其看成了一个 variable, 并且 this 关键字就是对象本身, 因此不可以被重新赋值, 但目前为止 variable 函数在解析 variable 的时候要么将其视为一个 global variable 还么将其视为一个 local variable; 这里显然将 this 看成是 local variable 是比较合理的
+在解析 this 关键字的时候, 本质上还是将其看成了一个 variable, 并且 this 关键字就是对象本身, 因此不可以被重新赋值, 但目前为止 variable 函数在解析 this 时会因为找不到 this 的 declaration 从而将其识别为一个 global variable; 而这里显然将 this 看成是 local variable 是比较合理的
 
 >   因为多个不同的 class 的 method 中均可以使用 this 关键字, 显然每个 this 都是不同的对象
-
-但这就会引出问题, 因为之前并没有通过 var 的方式将 this 定义为 local variable
 
 解析 function declaration 时, compiler 会把函数栈中第一个 slot 留给函数名本身; 而在遇到 method declaration 时, 该 slot 可以留给 this 关键字, 即在 method declaration 中就完成 this 的 local variable declaration
 
@@ -15361,6 +15376,8 @@ static void this(bool assign) {
 
 >   在 vm 中保存了一个 init_string 名为 'init', 专门就是用来搜索构造方法的
 
+注意到在调用 initializer 之前, 将 ClassObj 处覆盖为新创建的一个 InstanceObj, 这样在调用 initializer 时, 新的栈帧 slot 0 处保存的就是当前 InstanceObj, 即 this 关键字是可以正常使用的
+
 lox 禁止在 initializer 中显式通过 return 返回任何类型, 如果 lox 程序要么直接 return (没有返回值), 要么不写 return, compiler 通过在 return_statement 中进行检查实现这一点
 
 ```c
@@ -15417,6 +15434,8 @@ static void emit_nil_return() {
 
 因为既然是 method 的一种, 显然在运行的时候, slot 0 的为止保存的就是当前对象, 因此这里的返回值直接来自于当前方法调用的栈中
 
+>   其实执行 initializer 时 call frame 的 stack 的 slot 0 本身就是 InstanceObj 了, 在弹栈的时候, 其实可以将该 InstanceObj 保留下来, 但这里出于一致性的考虑, 没有对方法 end_scop() 进行修改, 而是重新加载一次 InstanceObj; 这其实是优化的点, 减少需要执行的指令数量 
+
 ### optimized invocation
 
 目前为止 clox 通过 CLOX_OP_GET_PROPERTY 加载 MethodObj 到 vm stack 中, 然后根据 CLOX_OP_CALL 执行函数调用
@@ -15452,9 +15471,9 @@ static void dot(bool assign) {
 
 如果 method name 后紧挨着一个 '(' 就将其识别为一个 method call, 使用一个新的字节码指令 CLOX_OP_INVOKE 进行方法调用
 
-当 vm 执行到该条字节码时, 栈空间如下: [xxx | instance | arg1 | arg2 | ... | argn]
+当 vm 执行到该条字节码时, 栈空间如下: [previous code | instance | arg1 | arg2 | ... | argn]
 
-这个字节码长度为 3, 格式为: CLOX_OP_INVOKE, method_name, arg_cnt; 其中 method name 保存在常量池中
+这个字节码长度为 3, 格式为: CLOX_OP_INVOKE, method_name, arg_cnt (method name 以常量池下标的方式保存)
 
 因此 vm 在执行时, 首先需要从常量池中获取对应的 name, 同时根据 arg_cnt 找到调用该方法的 instance; 这样便可以通过 instance 找到实际的 klass 了, 自然使用 method name 为 key, 从 klass 的 methods 中找到对应的 method
 
@@ -15523,7 +15542,28 @@ case CLOX_OP_INVOKE: {
 }
 ```
 
-具体的方法调用的合法性检查交给了 function_call 负责
+具体的方法调用的合法性检查交给了 function_call 负责; 注意到在调用之前将 InstanceObj 复写为 MethodObj, 而在 function_call 内部有会将 MethodObj 写回 InstanceObj; 这里没有直接调用 invoke 的主要原因在于下面这种情况:
+
+```lox
+class A {
+	a_fun() {
+		print "this is a";
+	}
+}
+
+class B {
+	b_fun() {
+		print "this is b";
+	}
+}
+
+var a = A();
+var b = B();
+a.b_fun = b.b_fun();
+a.b_fun();
+```
+
+注意到上面再 a 调用 b_fun 时, 会调用对象 b 的函数, 即 CLOX_OP_INVOKE 处的 instance 和实际发生方法调用的 instance 不同
 
 ### inheritance
 
@@ -15698,8 +15738,6 @@ static void super(bool assign) {
     }
     consume(CLOX_TOKEN_DOT, "Expect '.' after 'super'.");
     consume(CLOX_TOKEN_IDENTIFIER, "Expect superclass method name.");
-    // append property into constanct pool
-    uint16_t idx = identifier_constant(parser->previous);
 }
 ```
 
@@ -15892,7 +15930,7 @@ static Entry* find_entry_by_hash(StringObj *key, Entry *entries, int size) {
 
     >   其实更进一步的如果 fraction 的最高位为 0 时, 被称为 signalling NaNs -> 这部分通常表示为违法计算的结果, 比如除零异常时返回的数字就是一个 signalling NaN; 而如果最高位为 1, 则被称为 quite NaNs
 
-一般而言从硬件级别上, 如果运算得到了一个 signalling NaN, 程序会被终止, 但 quite NaNs 就像它名字说的那样, 很 "安静", 程序不会异常退出; 对于 NaN 而言除了 fraction 的最高位, 借助 fraction 种剩下的部分和 sign bit 还是可以表示一个很大的范围, 在双精度浮点数中, 有 52 bit, 可以表示的范围可太大了
+一般而言从硬件级别上, 如果运算得到了一个 signalling NaN, 程序会被终止, 但 quite NaNs 就像它名字说的那样, 很 "安静", 程序不会异常退出; 对于 NaN 而言除了 fraction 的最高位, 借助 fraction 中剩下的部分和 sign bit 还是可以表示一个很大的范围, 在双精度浮点数中, 有 52 bit, 可以表示的范围可太大了
 
 这意味着, 同样是 8 Bytes, 不仅可以表示 IEEE 754 定义的各个浮点数, 还可以表示 $2^{53} - 1$ 种类型; 而实际中, Intel 为 fraction 部分的次高位赋予了实际意义, 为了避开这部分, 实际还可以表示的类型有: $2^{52} - 1$ (更为一般的, 就算不使用 sign bit 仅 fraction 部分也可以表示 $2^{51} - 1$ 种类型)
 
@@ -16095,7 +16133,12 @@ print nan == nan;
 
 而如果直接比较 a 和 b, 那么会直接返回 true
 
+## todo
 
+*   优化 constant pool, 既然已经是 constant 的 (immutable) 的, 那么相同的 value 就应该在 constant pool 中使用相同的 slot, 因此这里需要创建一个 hash table, 其中 key 为 Value 类型, 而 value 为 constant pool index
+*   compiler 中的 assign 参数有点烦人了, 能不能想个办法把 assign 搞掉, 我这里想的是能不谁能使用全局的 assign 参数, 每次在 parse_precedence 中将其覆盖
+*   lox 目前不支持 break 跳出循环, 这其实有点不合理, 后续通过 back patching 的方式实现这个关键字
+*   clox 处理继承关系时, 对于 CLOX_OP_INHERIT 直接将父类的方法复制一份到子类中, 其实是有点浪费的, 更好的方式是保留一个父类的引用
 
 
 
