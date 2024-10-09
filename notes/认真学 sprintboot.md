@@ -971,7 +971,7 @@ public enum PostState implements StringValueEnum, IntValueEnum{
 
 一般而言 server 可以根据 jwt 对用户行为进行控制, 限制用户的访问: allow access to the resource or denie
 
-jwt 即 json web token, 本身由三部分组成: header, payload, signature
+jwt 即 json web token, 其基本格式是点分的字符串, 其中第一部分被称为 header, 第二部分被称为 payload, 第三部分为 signature
 
 ![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/03/02/21:39:51:jwt_structure.png)
 
@@ -996,6 +996,32 @@ print(f"Generated JWT secret key: {jwt_secret_key}")
 上述流程其实不重要, 因为在最新的 jjwt 验证中, 已经弃用了这种方式, 而强制要求用户必须使用 private key 和 public key pair; 任何的 client 都可以使用 public key 对签名进行验证, 而 server 需要使用 private key 进行签名; 
 
 这种 key pair 也是比较基本的非对称加密, 这里可以使用 openssl 即可生成对应的密钥对 (ssh-keygen 也行)
+
+### header
+
+header 中一半包含了两个信息:
+
+*   alg: 签名算法 (某种对称/非对称加密算法)
+*   typ: token 类型, 基本上就是 jwt
+
+### payload
+
+payload 由若干 claim 组成, 可以进一步将 claims 进行分类
+
+*   reigster claims: jwt 规范中定义的字段, 不是强制的
+*   custom claims: 可能 public, 可能 private
+
+jwt 规范中定义的 7 个 claim 字段:
+
+*   iss (issuer): jwt 签发方
+*   sub (subject): 当前 jwt 的主体 (用户)
+*   aud (audience): jwt 的接收方
+*   exp (expiration): jwt 的过期时间
+*   nbf (not before time): jwt 需要在该时间后才会生效
+*   iat (issue at time): jwt 的发布时间
+*   jti (jwt id): jwt 的唯一性标识
+
+除此之外还还可以在 jwt 中添加若干 custom claim
 
 ## security
 

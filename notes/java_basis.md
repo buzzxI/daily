@@ -316,6 +316,8 @@ java 使用 Throwable 表示各种错误和异常, throwable 有两个重要的�
 
     *   RuntimeException (运行时异常, 包括所有继承了该类的异常): 这些异常编译器不会检查, 比如 NullPointerException (对象为 null), ArrayIndexOutOfBoundsException (数组越界)
 
+不管是 Exception, 还是 Error, 都继承了 Throwable, 只要继承了 Throwable, 就可以通过 try-catch 捕获, 但一般不建议捕获 Error
+
 ## try-catch
 
 *   catch 的异常可以级联, 但异常最多只会被一个 catch 捕获, 所以从写法上一般将子类异常写在父类异常前面 (使用父类异常兜底)
@@ -635,8 +637,6 @@ int b = a; // 拆箱
 
 在编译时, 装箱会被编译为 Integer.valueOf(); 而拆箱会被编译为 Integer.intValue() => 字节码分别变为 invokestatic 和 invokevirtual
 
-
-
 # static
 
 static 类型的变量, 方法对属于类的, 在类加载阶段存在 \<clinit> => 不可以在 static 中调用非静态成员 (内存中可能不存在非静态成员)
@@ -649,9 +649,11 @@ static 类型的变量, 方法对属于类的, 在类加载阶段存在 \<clinit
 
 深拷贝的对象完全独立 => 对象本身独立, 对象引用的其他对象也独立
 
-浅拷贝的对象也是独立的, 但是拷贝的对象引用的对象时一致的, 只有拷贝的对象本身是独立的
+浅拷贝的对象也是独立的, 不过其仅仅复制了对象内部的基本数据类型, 对于引用类型还是相同的, 拷贝对象本身还是相互独立的
 
 在 java 中对象传递都是引用拷贝的 => 对象也不独立, 可以认为传递的只是一个引用而已, 不同的变量名保存的引用指向的都是同一个对象
+
+对象实现 Cloneable 接口, 直接调用父类的 clone() 方法默认实现的是浅拷贝, 通过手动重新调用成员变量的 clone 方法实现深拷贝 (成员变量的 clone 方法也需要实现深拷贝)
 
 # equals() & hashCode()
 
@@ -769,7 +771,15 @@ class Son extends Parent {
 
 jdk 5 引入的新特性, java 代码变臭的主要原因, 注解在解析后生效, 一般而言, 注解要么在编译期间被注解处理器扫描处理, 要么保留在运行期, 通过反射的方式获取注解的值
 
->   必然在 @QueryRedis 中通过注解的方式保存保存在 Redis 中的 key
+>   比如在 @QueryRedis 中通过注解的方式保存保存在 Redis 中的 key
+
+每个注解都具有属性: @Retention:
+
+*   RetentionPolicy.SOURCE: 仅在 .java 文件中保留, 不会保存在 .class 文件中
+*   RetentionPolicy.CLASS: (默认策略) 保留到字节码文件中, 但运行期间不可访问
+*   RetentionPolicy.RUNTIME: 运行时保留, 在运行时, 可以通过反射获得注解
+
+只要注解保存在字节码文件中, 那么就会将注解保存在字节码文件中 attribute 的部分中 
 
 # serialize/deserialize
 
@@ -829,5 +839,101 @@ jdk 5 引入的新特性, java 代码变臭的主要原因, 注解在解析后�
 *   枚举: 编译器会将其翻译为被 final 修饰的继承了 Enum 类型的类
 *   for-each: 最经典的语法糖
 
+# access modifier
 
+其实就是 public, private, protected 以及默认的不使用访问权限符时的权限
 
+*   public: 最开放的级别, public 的 member 可以被任意 package 下的类访问
+
+*   private: 最私密的访问级别, private 的 member 只能在相同的类内的 member 访问
+
+*   protected: protected 修饰的 member 可以被相同 package 内的 member 以及子类访问
+
+    >   要注意这里的子类访问父类的 protected 类型方法, 指的是子类的方法可以通过 super.func() 的方式调用父类中声明为 protected 的方法 (即便子类和父类不在相同的包中)
+    >
+    >   如果子类中保留了一个父类的对象作为 field, 那么子类无法通过对象的方式调用父类的 protected 方法 (子类和父类不在相同包中)
+
+*   default: 默认不使用访问符时, 就是 default 的权限, 只能被相同 package 内的 member 访问
+
+# BlockingQueue
+
+阻塞队列, 相比普通的队列, 具备阻塞特性, 队列的大小在构造时确定, 支持 put 与 take 两种阻塞操作; 使用 put 添加元素时, 如果当前队列满, 则需要让添加元素的线程阻塞; 使用 take 获取元素时, 如果当前队列空, 则需要让获取元素的线程阻塞
+
+本质上是一个满足了生产者-消费者模型的队列, 自然可以采用普通队列 + wait-notify 的机制实现
+
+```java
+class BlockQueue {
+    private final int limit;
+    private final Deque<Integer> q;
+
+    public BlockQueue(int limit) {
+        this.limit = limit;
+        this.q = new ArrayDeque<>(limit);
+    }
+
+    public synchronized void put(int x) throws InterruptedException {
+        while (q.size() == limit) {
+            this.wait();
+        }
+        q.offerLast(x);
+        this.notifyAll();
+    }
+
+    public synchronized int take() throws InterruptedException {
+        while (q.isEmpty()) {
+        	this.wait();
+        }
+        int rst = q.pollFirst();
+        this.notifyAll();
+        return rst;
+    }
+}
+```
+
+简单的 wait-notify 机制确实可以实现这个功能, 但其实可以进行优化, 消费者本质上可以仅唤醒生产者, 而生产者也只需要唤醒消费者, 所以可以采用条件数优化
+
+```java
+class BlockQueue {
+    private final int limit;
+    private final Deque<Integer> q;
+    private final Lock lock;
+    private final Condition notFull;
+    private final Condition notEmpty;
+
+    public BlockQueue(int limit) {
+        this.limit = limit;
+        this.q = new ArrayDeque<>(limit);
+        this.lock = new ReentrantLock();
+        this.notFull = lock.newCondition();
+        this.notEmpty = lock.newCondition();
+    }
+
+    public void put(int x) throws InterruptedException {
+        lock.lock();
+        try {
+            while (q.size() == limit) {
+                notFull.await();
+            }
+            q.offerLast(x);
+            notEmpty.signal();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public int take() throws InterruptedException {
+        lock.lock();
+        int rst = -1;
+        try {
+            while (q.isEmpty()) {
+                notEmpty.await();
+            }
+            rst = q.pollFirst();
+            notFull.signal();
+        } finally {
+            lock.unlock();
+        }
+        return rst;
+    }
+}
+```

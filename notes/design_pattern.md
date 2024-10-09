@@ -123,7 +123,14 @@ public class SingleTon {
 然而上面的写法还是存在问题的主要原因在于:
 
 *   内存可见性: new 对象的在运行时不一定会立刻同步到内存中, 在多级缓存的环境中, 运算结果可能只是保存在了快速缓存中;
-*   指令重排: jvm 为了优化运行速度, 可能对指令进行重新排序
+
+*   指令重排: jvm 为了优化运行速度, 可能对指令进行重新排序, new 对象的过程分为三个阶段进行, 编译器完全可以执行指令重排:
+
+    1.   为 new 的对象开辟内存空间
+    2.   执行 \<init> 调用构造方法
+    3.   将引用指向被分配的内存地址
+
+    如果将指令重排序, 可能存在 1 -> 3 -> 2 的顺序, 此时除了 new 对象的线程, 第二个线程会因为 singleTon 已经不是 null 而直接返回一个未被初始化的对象
 
 在 jdk 5 使用 jvm 提供了 `volatile` 关键字, 保证对变量的修改是内存可见的, 同时不允许进行指令重排序, 因此在 DCL 实现单例的场景中需要对变量添加 `volatile` 修饰:
 
@@ -166,7 +173,7 @@ public class SingleTon {
 
 lazy-loading 这个好理解，现在关键点在于如何保证线程的安全的
 
-JVM 对类进行初始化的场景 ([Chapter 5. Loading, Linking, and Initializing (oracle.com)](https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-5.html#jvms-5.5))
+JVM 对类进行初始化的场景 ([Chapter 5. Loading, Linking, and Initializing](https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-5.html#jvms-5.5))
 * 字节码指令为 `new, getsatic, setstatic, invokestatic` 时：
   
     >   分别对应于: new 一个实例化对象; 读取一个静态字段; 设置一个静态字段; 调用静态方法
@@ -857,6 +864,114 @@ System.out.println(proxyInstance.g());
 ```
 
 proxyInstance 上调用任何方法都会首先进入 invoke 方法 (包括 hash, toString 这样的方法)
+
+# template pattern
+
+在看 AQS 及其 JUC 库中各种其他锁的实现的时候, 遇到了这个
+
+>   简单来说, 所有基于 AQS 实现的 synchronizer, 只需要实现方法 tryAcquire/tryRelease (独占锁), 或者 tryAcquireShared/tryReleaseShared (共享锁)
+>
+>   这些方法并不是 AQS 的核心逻辑, 但 AQS 在 acquire/release 方法中会间接调用这些方法
+
+具体参考了例子: [Template Method in Java / Design Patterns](https://refactoring.guru/design-patterns/template-method/java/example)
+
+```mermaid
+---
+title: template pattern
+---
+classDiagram
+    
+ 	Network:+post() String
+ 	Network:#login() boolean *
+ 	Network:#sendData() boolean *
+ 	Network:#logOut() void*
+	
+	Network <|-- Facebook
+	Network <|-- Twitter
+```
+
+类型 Network 本身是 abstract 类型的, 仅暴露了核心方法 post, 此外还定义了三个 abstract 类型的方法, 所有非 abstract 的子类在继承了 Network 后都需要实现这三个方法
+
+```java
+// Network.java
+
+/**
+ * Publish the data to whatever network.
+ */
+public boolean post(String message) {
+    // Authenticate before posting. Every network uses a different
+    // authentication method.
+    if (logIn(this.userName, this.password)) {
+        // Send the post data.
+        boolean result =  sendData(message.getBytes());
+        logOut();
+        return result;
+    }
+    return false;
+}
+```
+
+template pattern 其实是完成了暴露方法的实现, 只不过暴露方法内部会调用一些尚未实现的接口, 这部分是需要子类特征化实现的
+
+反应在 AQS 中, 就是各个子类需要实现的并不是 acquire/release, 而是 acquire/release 调用的内部未实现接口
+
+# factory method pattern
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/09/03/21:26:47:factory_method_pattern.png)
+
+考虑对于接口 Product, 可能有多种实现, 比如上图中的 ProductA, 或者是 ProductB, 实际的业务逻辑被放在了方法 doStuff() 中
+
+如果没有工厂模式, 那么就需要通过 new 的方式获取一个 Product 对象
+
+```java
+Product p = new ProductA();
+```
+
+这是最常见的写法, 但现在设计了工厂模式, 定义工厂接口 Creator, 其中包含了方法 createProduct, 用来获取一个 Product 的实例对象; 具体实例化哪种类型的 Product 和工厂子类的类型有关, 比如 CreatorA 实现 createProduct 方法就会返回一个 ProductA, 而如果是 CreatorB 的话就会返回 ProductB
+
+在设计上, Creator 可以被设计为一个 abstract class, 而不是一个 interface, 所有继承了该类的子类都是专门生产某种 product 的工厂
+
+看起来工厂模式有点多余, 无非是将 new 对象的过程放在了方法 createProduct 中, 但工厂模式的好处在于, 可以在基础的 Product 上进行一些默认的配置, 不同 Product 的相同配置可以放在 Creator 中实现, 避免代码冗余
+
+```java
+abstract class Creator {
+    public abstract Product createProduct();
+    
+    public void productOperation() {
+        Product p = createProduct();
+       	p.doStuff();
+    }
+}
+
+class App {
+	private Creator creator;
+    
+    public App() {
+        config = readConfig();
+        if (config.type.equals("A")) {
+            creator = new CreatorA();
+        } else if (config.type.equals("B")) {
+			creator = new CreatorB();
+        }
+    }
+    
+    public void doStuff() {
+        creator.productOperation();
+    }
+}
+```
+
+# abstract factory pattern
+
+![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/09/03/21:43:31:abstract_factory_pattern.png)
+
+factory method pattern 关注的是对某种 Product 的不同实现下, 采用不同的 factory 进行封装, 本质上对于某种 Product 行为的封装
+
+abstract factory pattern 会更加关注一系列 Product 的不同实现, 比如现在有 ProductA 与 ProductB 两种 Product; 而他们彼此又可以分进行分类, 即 ProductA1 与 ProductB1 是一个系列, ProductA2 与 ProductB2 是一个系列
+
+>   更书面的说法: a set of distinct but related product(Product A, ProductB) which make up a product family
+
+定义接口 AbstractFactory, 专门用来生产一个系列下的所有 Product, 所有可以生产一系列 Product 的 factory 都需要实现方法 createProductA() 与方法 createProductB(); 比如上图中的实现类 Factory1 与 Factory2
 
 
 

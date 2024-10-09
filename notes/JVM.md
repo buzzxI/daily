@@ -43,6 +43,41 @@ jvm 选择的是基于栈的指令集架构；传统的 x86 系统是基于寄�
 
 一地址指令：格式化表示为：$|op|A_1|$，其中 op 为操作码，$A_1$ 为操作数的地址(或者操作数本身)
 
+# 对象创建
+
+*   检查类是否加载, new 对象时, 首先根据符号引用在常量池中检查对应的类是否已经完成了加载 => 加载, 链接, 初始化
+
+*   分配对象内存, 类完成加载后, 其对应需要的内存大小便可以确定, 此时通过: 指针碰撞或空闲列表为对象分配内存
+
+    >   指针碰撞: 一个指针一侧为未分配的内存, 另一侧为已经分配的内存, 为对象分配内存其实就是移动指针
+    >
+    >   空闲列表: 使用一个列表管理所有空闲的内存, 为对象分配内存时从列表中选择空闲的, 大小满足需求的分配
+    >
+    >   这两种方式的选择和 GC 是否具有整理功能有关, 如果 GC 可以进行内存整理, 则采用指针碰撞, 否则采用空闲列表 (CMS)
+
+*   初始化零值 
+
+*   设置对象头: mark word (GC, 锁相关), klass word (一个指针, 指向了对应 class 的 meta data)
+
+    >   对于数组类型对象头中还有一个额外的字段存储当前数组的大小 (4 Bytes)
+    >
+    >   在 32 bit os 中, 对象头大小为 8 Bytes (数组的话是 12 Bytes)
+    >
+    >   在 64 bit os 中, 对象头大小为 16 Bytes (数组的话是 20 Bytes) => 启用了引用压缩 (compressed reference) 之后 klass word 占用 4 Bytes
+
+*   调用 \<init> (构造方法)
+
+完成 init 的调用后, 对象才完成了创建
+
+对象在内存中, 由三部分组成: header, instance data, padding, 其中 header 主要包括 mark word 与 klass word
+
+在虚拟机栈中, 不考虑逃逸性分析的情况下, 程序都是通过引用的方式访问对象的, 实际的引用可能存在两种情况:
+
+*   句柄引用: 此时对象的引用指向的是句柄池, 而句柄池中保存了对象的实际地址与类信息
+*   直接引用: 对象引用指向的就是堆中的对象实例数据
+
+>   使用句柄引用的好处是, 加了一层, 在 GC 进行整理时, 不需要修改句柄引用, 直接修改句柄池就好; 使用直接引用的好处是可以直接定位到对象本身, 减少了一次内存访问的开销
+
 # 类加载子系统
 
 类加载的过程：加载(loading)、链接(linking)、初始化(initialization)，其中链接过程本身又分为验证(verify)、准备(prepare)、解析(resolve)三个过程
@@ -72,25 +107,34 @@ jvm 选择的是基于栈的指令集架构；传统的 x86 系统是基于寄�
 >
 > - 从本地系统中直接加载
 > - 通过网络获取，典型场景：Web Applet
-> - 从 zip压缩包中读取，成为日后 jar、war 格式的基础
+> - 从 zip 压缩包中读取，成为日后 jar、war 格式的基础
 > - 运行时计算生成，使用最多的是：动态代理技术
 > - 由其他文件生成，典型场景：JSP 应用
 > - 从专有数据库中提取.class 文件，比较少见
 > - 从加密文件中获取，典型的防 Class 文件被反编译的保护措施
 
+类的 loading, 由类加载器完成, 具体使用的类加载器通过双亲委派机制确定, 所有被创建的 Class 对象都包含了一个指向对应类加载器的引用 => getClassLoader() 获取
+
 ## linking
 
 分为三个过程：验证、准备、解析
 
-* 验证（Verify）：目的在子确保 Class 文件的字节流中包含信息符合当前虚拟机要求，保证被加载类的正确性，不会危害虚拟机自身安全。主要包括四种验证，文件格式验证，元数据验证，字节码验证，符号引用验证。
+* 验证（Verify）：目的在子确保 .class 文件的字节流中包含信息符合当前虚拟机要求，保证被加载类的正确性，不会危害虚拟机自身安全。主要包括:
+
+    *   文件格式验证: 当前字节流需要符合 .class 文件规范, 魔数信息, 版本号符合 jvm 要求; 文件格式验证后, 不会再操作字节码流了
+    *   元数据验证: 对当前类的验证, 不允许继承 final 类型的类
+    *   字节码验证
+    *   符号引用验证: 该过程发生在 linking 的解析阶段 => 将符号引用转化为直接引用; 会验证方法的权限信息
+
+    >   验证阶段可以通过修改 jvm 参数关闭 -Xverify: none
 
 * 准备（Prepare）：
 
-  * 为类变量分配内存并且设置该类变量的默认初始值，即零值。
+  * 为类变量分配内存并且设置该类变量的默认初始值, 即零值 => 方法区 (meta space)
 
-    > 类变量就是被`static`修饰的变量
+    > 类变量就是被 `static` 修饰的变量
     >
-    > * 类变量在`prepare`阶段赋零值，在`initialization`阶段赋初值(特别的，对于引用类型赋值为`null`)
+    > * 类变量在 `prepare` 阶段赋零值，在 `initialization` 阶段赋初值(特别的，对于引用类型赋值为`null`)
     > * `final`修饰的变量在编译时期就已经赋予了零值，在`prepare`阶段会赋予初值
     > * 成员变量在`new`对象的时候赋初值
     >
@@ -99,8 +143,10 @@ jvm 选择的是基于栈的指令集架构；传统的 x86 系统是基于寄�
     > 要注意的是成员变量具有默认初始化操作，类变量是在 linking 阶段中的 prepare 阶段进行的初始化(而在 initialization 阶段进行显式赋值)，而实例变量是在 new 对象的时候进行默认初始化(如果在构造方法中进行显式赋值)；
     >
     > 而局部变量没有默认的初始化操作，在使用前需要手动赋予初值
+    
+    实际中有些类变量可能在堆区分配, 比如字符串常量
   
-* 解析（Resolve）：将常量池内的符号引用转换为直接引用的过程。
+* 解析 (Resolve): 将常量池内的符号引用转换为直接引用的过程。
 
   > 符号引用就是一组符号来描述所引用的目标。符号引用的字面量形式明确定义在《java 虚拟机规范》的 Class 文件格式中。直接引用就是直接指向目标的指针、相对偏移量或一个间接定位到目标的句柄。
   >
@@ -110,7 +156,7 @@ jvm 选择的是基于栈的指令集架构；传统的 x86 系统是基于寄�
 
 ## initialization
 
-简单来说就是调用`<clinit>`方法，这里的`<clinit>`和普通的`<init>`方法类似，满足父类的`<clinit>`在子类的`<clinit>`之前，且这个方法也不需要手动定义，这个方法是编译器手动收集类变量的赋值操作和`static`代码块的内容合并得到的
+在该阶段 jvm 执行字节码, 调用 `<clinit>` 方法，这里的`<clinit>`和普通的`<init>`方法类似，满足父类的`<clinit>`在子类的`<clinit>`之前，且这个方法也不需要手动定义，这个方法是编译器手动收集类变量的赋值操作和`static`代码块的内容合并得到的
 
 这里特别注意：
 
@@ -188,6 +234,21 @@ public class InitializationTest {
 
 要注意的是`<clinit>`和类变量高度相关，如果一个类中没有类变量，自然也就没有`<clinit>`方法
 
+jvm specification 中规定了 6 中必须执行类初始化的情况:
+
+*   字节码指令: new (初始化一个实例时, 类尚未加载), getstatic (获取类变量), putstatic (设置类变量), invokestatic (调用静态方法)
+*   反射有关的调用, Class.forName()
+*   加载一个类的时候, 其父类尚未被加载
+*   jvm 启动时, 包含了 main 方法的类会被加载
+
+## 卸载
+
+对应了 Class 对象被 GC 回收掉, 要回收 Class 对象需要满足
+
+*   当前类的各个实例对象都被 GC 回收了
+*   当前类不能被其他地方引用
+*   当前类的 ClassLoader 也被 GC 回收了
+
 ## 类加载器
 
 其实严格意义上就分为两类：`bootstrap class loader`和`user-defined class loader`，其中`bootstrap class loader`是由`jvm`提供的，而`user-defined class loader`是抽象类`ClassLoader`的子类
@@ -200,7 +261,7 @@ A class loader is an object that is responsible for loading classes. The class C
 >
 > 给定一个类的`binary name`，类加载器会试图定位这个类，并(在方法区)生成定义这个类的数据(DNA元数据模板)。
 >
-> 这里面注意这个`binary name`，主要在这里定义[Chapter 13. Binary Compatibility (oracle.com)](https://docs.oracle.com/javase/specs/jls/se11/html/jls-13.html#jls-13.1)
+> 这里面注意这个`binary name`，主要在这里定义[Chapter 13. Binary Compatibility](https://docs.oracle.com/javase/specs/jls/se11/html/jls-13.html#jls-13.1)
 
 Every Class object contains a reference to the ClassLoader that defined it.
 
@@ -243,38 +304,34 @@ The ClassLoader class uses a delegation model to search for classes and resource
 主要是模块化机制，使得原来的 extension 机制被废除了[JEP 220: Modular Run-Time Images (java.net)](http://openjdk.java.net/jeps/220)
 
 * application class loader：现在不再是 URLClassLoader 的一个实现了，而是类 ClassLoaders 的一个内部类，不过功能还是一样，是除了核心类库的默认的类加载器
-* platform class loader：也是一个内部类，用来记载一部分 Java SE and JDK 的模块
-* bootstrap class loader：还是 jvm 内部实现的，并且调用 getParent() 方法也是获取不到的
+* platform class loader：也是一个内部类，用来加载一部分 Java SE and JDK 的模块 (大部分还是 bootstrap class loader 加载的)
+* bootstrap class loader：还是 jvm 内部实现的，并且调用 getParent() 方法也是获取不到的; 负责加载 java 的基础库, 所有 java.xxx.* 的类都是通过这个类加载器加载的
 
 更为具体的，这三个类加载器的加载范围在上面的链接中有详细的展示，这里不复制了
 
 判断两个 Class 对象是否相同，不仅需要比较两个类的全类名，还需要比较两个类的类加载器是否相同，同时满足时，才可以说明两个类是相同的
 
+class loader 会保存其加载的各个类 (置于字段 classes 中, 在 jdk 17 中是使用 ArrayList 实现的)
+
 如果一个类是通过 user-defined class loader 加载的，那么当这个类被加载到方法区后，会在方法区同时保留指向对应类加载器的引用
 
 > 这也就是为什么 bootstrap class loader 加载的类在 getClassLoader() 时返回值为 null
 
-在 java 中对类的使用分为主动使用和被动使用两种，其中被动使用不会进行类的初始化，即不会调用 `<clinit>` 方法
+通过继承 ClassLoader 可以自定义类加载器, 默认的通过修改方法 findClass() 可以实现自定义的类加载器 => jdk 官方文档的例子是通过网络获取二进制流, 自定义的 class loader 加载来自网络的 class
 
-主动使用：
+jvm 官方推荐使用双亲委派机制实现类加载, ClassLoader 的 loadClass 方法:
 
-* 创建类的实例对象
+*   先调用 findLoadedClass, 看看当前类是否已经加载过了
+*   调用 parent ClassLoader 的 loadClass 方法执行类加载
+*   最后调用 findClass 方法执行本 ClassLoader 方法中定义的类加载方法
 
-* 访问某个类的静态变量或静态方法
+需要注意的是, parent 可能为 null (PlatformClassLoader), 此时会调用 native 方法 findBootstrapClass 显式调用 BootstrapClassLoader 进行类加载
 
-* 反射获取某个类
+整个 loadClass 的代码逻辑就是双亲委派, 显然委托父类加载器进行加载, 加载不了再调用当前类加载器的方法进行加载
 
-* 初始化一个类的子类(根据类加载的流程，加载父类会在子类之前，故父类会先调用 `<clinit>` 方法)
+>   application class loader 并不是 platform class loader 的子类, 二者之间的关系通过子类加载器中的字段 parent 维护
 
-* 被 jvm 标注为启动类的类
-
-* JDK 7 开始提供的动态语言支持：
-
-  java.lang.invoke.MethodHandle 实例的解析结果
-
-  REF_getStatic、REF_putStatic、REF_invokeStatic 句柄对应的类没有初始化，则初始化
-
-  > 这个看不懂
+值得庆幸的是方法 loadClass 并没有被 final 修饰, 这意味着这个方法是可以被重写的, 因此自定义的 ClassLoader 可以通过修改 loadClass 方法打破双亲委派机制, 比如 tomcat  就续写了 Class Loader 的委派链, 变得更长了 ...
 
 # 运行时数据区
 
@@ -320,7 +377,7 @@ jvm 自带的后台线程：
 
 > 有两种方式实现方法返回：
 >
-> * 正常的方法返回：这个对应了 return，即便是 void 类型的方法也可以具有return
+> * 正常的方法返回：这个对应了 return，即便是 void 类型的方法也可以具有 return
 > * 抛出异常：更精确的说法是抛出的异常并未使用 try-catch 进行捕获
 
 当然栈帧也不是最小的单元，一个栈帧中包含了：操作数栈、局部变量表、动态链接、方法返回地址、一些附加内容
@@ -394,6 +451,8 @@ $ javap -v LocalVariablesTest.class
 
 局部变量表中的变量属于 GC 的根节点(这意味着：被局部变量表直接或间接引用的变量不会被回收)
 
+>   局部变量表可以类比 clox 中的运行时当前栈帧对应的栈信息, 在 clox 中方法调用后, 栈帧被加载, 此时执行栈中默认加载的 slot 就是这里的局部变量表
+
 ### 操作数栈(operand stack)
 
 > 称 jvm 的执行引擎是基于栈的，这里说的就是操作数栈
@@ -455,6 +514,10 @@ public void pushReturnValueTest() {
 ```
 
 可以看到，最大的区别从 istore_1 变为了 pop，弹出操作数栈的，就是方法返回值
+
+>   clox 并没有区分操作数栈和局部变量表, 函数调用后, 会将 this 关键字与参数列表压入运行时栈 (有点类似操作数栈), 在执行函数的过程中会将局部变量压入操作数栈, 但不弹出
+>
+>   因此在 clox vm 在进行运算操作时, 每次操作的元素不一定是栈顶元素, 可能是函数入参, 还可能是某些之前的局部变量
 
 #### 栈顶缓存技术
 
@@ -604,6 +667,8 @@ public static void main(String[] args) {
 
 这部分可以参考 [Lambda 表达式与invokedynamic](https://www.yuque.com/wanghuaihoho/aw880k/ya8ryy)
 
+>   clox 没有实现动态链接, 因为只有一个保存全局符号的 hash table, 也没有方法区的概念, 默认的在类的声明中, 将类保存在全局符号 hash table 中了 (在程序运行前执行所有类的加载)
+
 ### 方法返回地址(return address)
 
 考虑一个简单的场景，即当前虚拟机栈中存在两个栈帧 A 和 B，其中 B 为当前栈帧(即在方法 A 中调用了方法 B)，称 A 为主调方法
@@ -727,8 +792,6 @@ public void methodA();
 
 堆区中存放的对象，在失去所有的引用后**不会立刻被回收，需要等到发生 GC 时才回收内存空间**
 
-
-
 堆空间的大小通过启动参数控制：
 
 * -Xms(-XX:InitialHeapSize)：堆区的初始大小(建议值为 [实际物理内存 / 64])
@@ -736,9 +799,105 @@ public void methodA();
 
 当需要的内存空间超出了堆区最大的内存空间后，将抛出 OOM
 
+jdk 8 之后 jvm 堆结构由三部分组成: 
 
+*   young generation: 包括 eden 区, survivor 0 区, survivor 1 区
+*   old generation
+*   meta space
 
+默认对象被分配到 eden 区, 在一次 GC 后被放入 survivor 0/1 区 => 如果当前 GC 后被放入了 survivor 0 区, 则下次 GC 后放入 survivor 1 区
 
+每次 GC 后对象的年龄增加, 对象超过一定年龄后被存储到 old generation 中 => 该限最大值为 15, 实际中为动态界限
+
+>   对象在内存中由三部分组成:
+>
+>   *   header: 包括 mark word 与 klass word (指向对应的 Class 对象), 其中 mark word 使用 4 bit 记录了对象的年龄信息, 因此最大年龄限为 15
+>   *   instance data: 对象的实例数据
+>   *   padding: 对齐填充 (对齐作用)
+
+基本的分代界限计算思路是, 从小到大计算各个年龄的对象大小之和, 当超出了 survivor 区一半大小后, 此时的年龄为分代年龄
+
+## 方法区
+
+在 jdk 8 之后, 方法区的实现变为了使用 direct memory 的 meta space; 使用了 meta space 后, 解除了 jvm 的内存限制
+
+主要包含了类信息, 类包含的字段, 方法, 常量, 静态变量, 
+
+## 常量池
+
+运行时常量池: .class 文件编译后得到常量池表, jvm 加载运行时将这部分抽象为运行时常量池, 包含了字面量与各种符号引用 => 保存在方法区中
+
+字符串常量池: 主要是各种 string 类型的字面量, 或通过 intern 后得到的 string 类型对象, 保存在堆区中 => 放在堆区而不是 meta space 中, 提高 GC 回收 string 类型的效率
+
+# 垃圾回收
+
+对象首先被分配到堆区的 eden 区中, 如果 eden 空间不足, 则会发起 minor GC; 此时 eden 中幸存的对象会被存放于 survivor 区中 (0/1 交替)
+
+可能出现 survivor 区不够大的情况, 此时对象会直接在 old generation 中分配; 在经过多次 minor GC 后, survivor 中幸存的对象会被分配到 old generation 中
+
+>   将 survivor 中对象移动到 old generation 中的时机是动态调整的, 源码中, 会根据对象的年龄, 从小到大计算对象大小的和, 一旦满足了当前年龄下对象大小大于了 survivor 区的一半大小, 就将该年龄作为门限, 大于这个门限的对象会被移动到 old generation
+
+jvm 中的 gc 分为以下几类:
+
+*   young GC: 只针对 young generation 的 GC => eden, survivor 0/1
+*   old GC: 只针对 old generation 的 GC
+*   mixed GC: young generation 与一部分 old generation 的 GC
+*   full GC: 全部区域, 包括了 meta space
+
+一般而言, 有两种判断对象是否死亡的方法: 引用计数/可达性分析; 一般前者不用, 因为不能解决循环引用的问题
+
+所谓可达性分析, 说的是从 GC root 出发进行标记, 同步标记 GC root 引用的各个对象 (clox 中主要是栈/全局变量表中的对象), jvm 中的 GC root 比较多:
+
+*   栈帧中局部变量表中的引用的对象 (虚拟机栈/本地方法栈)
+*   方法区中静态变量引用的对象 (包括常量)
+*   被同步锁持有的对象
+
+一般而言不可达的对象就是垃圾了, 可以被回收了, 远古版本中 Object 类中定义了方法 finalize(), 会在对象销毁前调用, 现在这个方法已经被废弃了, 可以认为不可达的对象就是垃圾
+
+垃圾回收算法并没有那么复杂:
+
+*   标记-清除算法 (clox 实现): 最简单的垃圾回收方法, 垃圾直接释放掉就好了, 问题在于可能导致外部碎片问题
+*   标记-复制算法: 将所有的内存分为两部分, 每次只用一半, 一次 GC 之后, 将活着的对象复制到另一个区域中; 相比之下进行了对象在内存中占用空间的整理, 显著改善了外部碎片问题, 但是最直接的问题是可用内存大小减半了
+*   标记-整理算法: 在标记清除算法的基础上, 会让幸存的对象向一端移动, 同时维护内存边界, 这样边界一侧都是可用对象, 另一次的都是垃圾
+
+没有哪种算法是最好的, 所以 jvm 采用的分代垃圾回收, jvm 的 survivor 的设计显然是参考了标记复制算法; 统计表示, 很多对象其实都活不过 eden, 进入 survivor 的就更少了, 在这种背景下, 采用标记-复制实现 survivor 其实并没有那么慢; 而一旦进入了 old generation, 那么对象轻易就不会死掉了, 对 old generation 采用标记整理算法会更合适
+
+*   在 jvm 中最早的 GC 是 serial GC, 每次工作时会发生 STW, 对 young generation 采用标记-复制算法实现, old generation 采用标记-整理算法实现
+
+*   ParNew 在 serial 的基础上进行了改进, 从名字上能看出来, 针对 young generation 实现了并发的标记-复制算法
+
+*   Parallel Scavenge 针对 old generation 实现了并行的标记-整理算法, 设计目标为最大化吞吐量 (CPU 执行用户程序的时间与 CPU 执行时间的比值)
+
+*   CMS: 首次实现了并发 GC, 整个标记过程分为几个阶段
+
+    *   初始标记: STW, 只标记 GC root
+    *   并发标记: 和用户程序同步执行, 从 GC root 出发标记各个对象
+    *   重标记: STW, 并发标记, 主要目标为并发标记阶段中用户程序额外创建的对象
+
+    整个垃圾回收阶段也是并发的, 和用户程序同步, 执行标记-清除算法的清除阶段, 显然存在外部碎片问题, 因为清理过程是和用户程序并发进行的, 所以有浮动垃圾
+
+*   G1: 最大的特点是对整个内存区域分为若干个大小相同的 region, 每个 region 都可以是 eden 区, survivor 区, old 区, 这意味着这几个区域不再连续了, 这意味着各个区域的内存标记, 回收可以并发进行 ! young GC 与 mix GC 采用标记-复制算法, full GC 采用标记-整理算法
+
+    *   初始标记 (STW): 仅 GC root, 比较快
+
+    *   并发标记: 与用户程序同步进行, 不考虑耗时
+
+    *   最终标记 (STW): 标记在并发标记阶段变化的对象
+
+    *   清理 (STW): 主要目的是区分出具有包含了存活对象的分区与无存活对象的分区, 不进行对象复制, 很快
+
+    *   复制 (STW): 主要包含了分配新内存与对象复制, 其中瓶颈出现在对象复制阶段, 对象越复杂数量越多耗时越长
+    
+    G1 相比于 CMS 实现了可预测的停顿时间模型
+
+*   ZGC: 可以看到 G1 的瓶颈出现在了对象复制必须是 STW 的, ZGC 就是想办法实现了并发的对象复制, 主要的技术是指针染色与读屏障
+
+    *   指针染色: ZGC 仅支持 64 bit 的平台, 地址采用 64 bit 使用, 在虚拟地址空间, 仅低 44 bit 作为寻址, 高 4 bit 作为控制信息存在, 最高位的 16 bit 未被使用; 4 个控制 bit 中重要的 3 个 bit: remap bit, m0 bit, m1 bit, 任何对象在任意时刻这三个 bit 只有一个 bit 会被置位, 即每个物理内存上的对象都可能被映射到上述三个虚拟地址上
+    *   读屏障: 简单来说就是通过引用获取对象时, ZGC 通过类似 interposition 的技术, 插入控制流, 从而实现修改引用程序访问的引用地址的功能, 比如应用程序访问的引用地址为 0xff 时, 通过读屏障可以将该引用地址修改为 0x3f ...
+    
+    ZGC 也是在分区的基础上进行垃圾回收的, 向比 G1, ZGC 优化的点就是对象复制, ZGC STW 的对象复制阶段仅复制 GC root, 相比 G1 复制的对象更少, 而被 GC root 引用的对象是与应用程序是并行复制的, 关键点在应用程序访问那些被复制过的对象是, ZGC 通过读屏障修改其原始引用, 定位到最新的地址上
+    
+    [JVM工作原理与实战(四十)：ZGC原理](https://developer.aliyun.com/article/1502806)
 
 # 字节码
 
@@ -781,7 +940,7 @@ javac是一种全量编译器，每次会将文件中全部内容进行一次编
 
 * 魔数：0xcafebabe
 * Class文件版本信息：主版本和小版本
-* 常量池：计数器用来表示表的大小，后面紧跟个一个表（下标索引从0到len - 1）
+* 常量池：计数器用来表示表的大小，后面紧跟个一个表
 * 访问标志
 * 类索引，父类索引，接口索引集合
 * 字段（域）表集合
@@ -954,6 +1113,35 @@ java的主版本号从45开始，编译器为1.1版本的对应于主版本45，
 随后使用javap命令反编译hello类，得到关于的版本信息：java1.8
 
 ![](https://cdn.jsdelivr.net/gh/SunYuanI/img/img/javap_version.png)
+
+## 常量池
+
+主要包括常量池大小与保存了符号的数组, 注意到创建的常量池数组大小为 count - 1, 实际中的运行时常量池大小为 count, 区别在于这里保存的常量池不包括运行时常量池下标为 0 处的符号, 常量池中主要保存的是字面量与符号引用
+
+|               类型               | 标志（tag） |          描述          |
+| :------------------------------: | :---------: | :--------------------: |
+|        CONSTANT_utf8_info        |      1      |   UTF-8 编码的字符串   |
+|      CONSTANT_Integer_info       |      3      |       整形字面量       |
+|       CONSTANT_Float_info        |      4      |      浮点型字面量      |
+|        CONSTANT_Long_info        |      5      |      长整型字面量      |
+|       CONSTANT_Double_info       |      6      |   双精度浮点型字面量   |
+|       CONSTANT_Class_info        |      7      |   类或接口的符号引用   |
+|       CONSTANT_String_info       |      8      |    字符串类型字面量    |
+|      CONSTANT_FieldRef_info      |      9      |     字段的符号引用     |
+|     CONSTANT_MethodRef_info      |     10      |   类中方法的符号引用   |
+| CONSTANT_InterfaceMethodRef_info |     11      |  接口中方法的符号引用  |
+|    CONSTANT_NameAndType_info     |     12      |  字段或方法的符号引用  |
+|     CONSTANT_MethodType_info     |     16      |      标志方法类型      |
+|    CONSTANT_MethodHandle_info    |     15      |      表示方法句柄      |
+|   CONSTANT_InvokeDynamic_info    |     18      | 表示一个动态方法调用点 |
+
+常量池表中的每一项大小都不是确定的, 每项的第一个字节通过标志位表示类型
+
+## 访问标识
+
+就是个大小为两个字节的标识位, 比如 ACC_PUBLIC, ACC_SYNCHRONIZED ...
+
+
 
 ## 一些字节码指令
 

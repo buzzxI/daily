@@ -1670,7 +1670,7 @@ uint64 available_mem() {
   uint64 rst = 0;
   acquire(&kmem.lock);
   struct run* r = kmem.freelist;
-  for (; r; r = r->next) rst += PGSIZE;
+  for (; r; r = r->next) rst += PGSIZE;	
   release(&kmem.lock);
   return rst;
 }
@@ -3566,6 +3566,122 @@ e1000_recv(void)
 
 E1000 可能存在一次写入多个 mbuf 的情况, 因此在将 mbuf 递给 xv6 的时候需要使用循环保证每个被 E1000 写入的 mbuf 都可以被呈递给 xv6 kernel
 
+## one more thing
+
+xv6 使用 mbuf 保存从 socket 到网卡驱动之间的数据, 实际在 linux 中也是类似的使用 sk_buff 保存数据
+
+xv6 并没有提供一个完整的网络栈, 默认情况下仅支持 UDP 作为传输层协议, 后续的发包收包过程都只针对 UDP - ip 数据包而言, 至于 ARP 数据包就不提了
+
+### xv6 rx
+
+在 xv6 中, 网卡通过 DMA 的方式将数据保存在 Ring Buff 中, 网卡完成了数据传输后, 会向 CPU 发起中断
+
+```c
+// trap.c
+
+// check if it's an external interrupt or software interrupt,
+// and handle it.
+// returns 2 if timer interrupt,
+// 1 if other device,
+// 0 if not recognized.
+int
+devintr()
+{
+  uint64 scause = r_scause();
+
+  if((scause & 0x8000000000000000L) &&
+     (scause & 0xff) == 9){
+    // this is a supervisor external interrupt, via PLIC.
+
+    // irq indicates which device interrupted.
+    int irq = plic_claim();
+
+    if(irq == UART0_IRQ){
+      uartintr();
+    } else if(irq == VIRTIO0_IRQ){
+      virtio_disk_intr();
+    }
+#ifdef LAB_NET
+    else if(irq == E1000_IRQ){
+      e1000_intr();
+    }
+#endif
+    else if(irq){
+      printf("unexpected interrupt irq=%d\n", irq);
+    }
+
+    // the PLIC allows each device to raise at most one
+    // interrupt at a time; tell the PLIC the device is
+    // now allowed to interrupt again.
+    if(irq)
+      plic_complete(irq);
+
+    return 1;
+  } else if(scause == 0x8000000000000001L){
+    // software interrupt from a machine-mode timer interrupt,
+    // forwarded by timervec in kernelvec.S.
+
+    if(cpuid() == 0){
+      clockintr();
+    }
+    
+    // acknowledge the software interrupt by clearing
+    // the SSIP bit in sip.
+    w_sip(r_sip() & ~2);
+
+    return 2;
+  } else {
+    return 0;
+  }
+}
+
+```
+
+注意到宏定义 LAB_NET, 标识如果触发中断的设备为网卡设备时, 会调用函数 e1000_intr()
+
+```c
+// e1000.c
+
+void
+e1000_intr(void)
+{
+  // tell the e1000 we've seen this interrupt;
+  // without this the e1000 won't raise any
+  // further interrupts.
+  regs[E1000_ICR] = 0xffffffff;
+
+  e1000_recv();
+}
+```
+
+这里首先阻塞了 E1000 的中断寄存器, 避免 E1000 频繁触发 CPU 中断, 在 linux 中也存在类似的机制, 被称为 NAPI 机制 -> 触发一次中断后就阻塞该中断, 并不断轮询直到清空 ring buff
+
+注意到这个函数会调用 e1000_recv, 也即本 lab 实现的函数, 一次性从 ring buff 中获取所有的数据包, 每个数据包都被封装为 mbuf (linux 中被称为 sk_buff), 在 xv6 中会调用 net_rx 将该 mbuf 提交给 xv6 网络栈
+
+在仅考虑 udp 数据包的情况下, xv6 网络栈的调用逻辑如下: net_rx -> net_rx_ip -> net_rx_udp -> sockrecvudp (sysnet.c); 其中几个 net_rx_ip 与 net_rx_udp 主要起到校验头部, 同时去头的作用
+
+sockrecvudp 的函数参数包含了: mbuf (实际的物理数据), raddr (remote address, 就是目的地的 ip 地址), lport (local udp port), rport (remote udp port)
+
+>   常说的五元组为: 传输层协议 (udp/tcp) + 源 ip + 目的 ip + 源端口号 + 目的端口号, 由于目前 xv6 不支持 TCP, 因此没有协议, 同时认为当前主机只有一个网卡所以也没有源 ip 地址
+
+函数 sockrecvudp 会根据 "三元组" 找到匹配的 socket, 将当前 mbuf 以链表的方式链接在 socket 数据 buf 的尾部, 这也是为什么 e1000 在写 recv 函数的时候每次获取到一个 mbuf 之后都需要重新分配一个新的 mbuf, 最后唤醒阻塞在当前 socket 的进程 (状态由 SLEEPING 切换为为 RUNNABLE)
+
+要注意的是, 在 xv6 中, 进程会因为调用 syscall -> sys_read (socket 本质上也是通过 file descriptor 体现的), 而 socket 缓存区中不存在数据而被阻塞, 在进程后续被唤醒后, 一定是因为有 socket 的数据到达了, 此时会 xv6 kernel 才会将数据从 kernel space 复制到 user space
+
+>   真实环境中 linux 的操作也是类似的, linux 的网络栈在收到一个 sk_buff 之后, 首先会检查当前 ip 地址的类型 (ipv4/ipv6), 随后去掉帧头/帧尾, 从数据帧得到一个数据包提交给网络层, 网络层会进一步检查当前数据包的上层协议, 同时去掉 IP 头并递交给传输层 (udp/tcp), 传输层通过读取数据包获得四元组, 并找到对应的 socket, 并将 sk_buff 保存至对应 socket 的数据缓存区, 最后调用 socket 接口将 sk_buff 中的数据保存到用户地址空间中, 同时唤醒阻塞在当前 socket 上的进程
+
+### xv6 tx
+
+其实有了 rx 的经验, tx 的操作也很简单, 每个使用 socket 的写操作都会通过 syscall -> sys_write 实现的, 此时会调用 sysnet 中的函数 sockwrite, 先分配一个新的 mbuf, 并将数据从 user space 写入 mbuf, 最后调用网络栈 net_tx_udp 进行数据传输
+
+发送数据的调用逻辑如下: net_tx_udp -> net_tx_ip -> net_tx_eth -> e1000_transmit (即本 lab 需要实现的函数), 要注意的是从函数 e1000_transmit 返回之后, net_tx_eth 会将之前分配的 mbuf 释放
+
+mbuf 在 tx 中使用时, 默认从高地址使用, 不管是填充数据还是头部, 都需要首先将数据包头部指针从高地址移动到低地址
+
+>   真实环境中 linux 的操作也是类似的, 用户程序调用 write 进行写操作, 会将数据复制一份到 sk_buff 中, 随后进入网络栈, 特别的对于 TCP 协议而言, linux 不会直接下放 sk_buff 到网络层, 因为 linux 网络层默认也会在完成数据传输后将 sk_buff 释放掉, 因此如果是 TCP 协议, 会将 sk_buff 的一个副本递交给网路层, 只有收到了 ack 之后才会删除对应的 sk_buff
+>
+>   
+
 ## locks
 
 这个 lab 需要实现的是锁的拆分, 通过将 giant-lock 拆分为 fine-grained lock, 可以显著提升并发性能
@@ -4475,7 +4591,7 @@ uint64 sys_mmap(void) {
     }
     writeback = 1;
   } else {
-    if(prot & PROT_WRITE) access_bits |= PTE_W;
+    if (prot & PROT_WRITE) access_bits |= PTE_W;
     if (prot & PROT_READ) access_bits |= PTE_R;
   }
 
@@ -4809,7 +4925,7 @@ fork(void)
 
 ## xv6 concurrency
 
-## lock pattern 
+## lock pattern
 
 在 file system 的 block 的设计中, buffer cache layer 层维护了多个 buf, 其中每个 buf 都持有一个 sleeplock 用来保证同时间只有一个进程可以访问当前 block, 此外对于所有的 buf 采用了 bcache lock 用来保证每个 buf 都只被缓存了一份 => one lock for the set of items and one lock per item
 

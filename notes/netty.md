@@ -2061,7 +2061,14 @@ request 的数目越多 server 创建的进程 (线程) 数目越多, 在大量�
 *   reactor: 一个独立的线程, 负责监听事件, 并调用适当的 handler 处理事件
 *   handler: 处理 IO 请求, 可能是多线程的
 
-reactor model 本身也可以分为多种类型
+reactor model 本身也可以分为多种类型, 主要根据 reactor 的数量, 调用 handler 的线程的数量进行分类, 排列组合以下:
+
+*   单 reactor, 单线程
+*   单 reactor, 多线程
+*   多 reactor, 单线程
+*   多 reactor, 多线程
+
+其中多 reactor, 单线程的模型并没有理论性能的提升, 同时提高的系统复杂度, 没有得到应用
 
 ### single-threaded
 
@@ -2069,11 +2076,13 @@ one reactor + single thread => redis
 
 ![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/06/24/21:26:44:single_thread_reactor_model.png)
 
-reactor 使用 selector 监测 connection event 与 receive event; reactor 使用 acceptor 作为 connection event 的 handler, 使用更为一般的 handler 处理 read 请求
+reactor 通过 syscall select 监听事件, 并在事件发生后调用 dispatch 进行事件分发 (dispatch 进一步调用 handler)
 
->   acceptor 本身也只是创建一个普通的 handler 而已
+所有的 handler 分为两类, 要么是 acceptor (调用 syscall accept 获取链接, 同时创建 handler 处理该链接), 要么是一般的 handler (通过 syscall read 获取数据, 完成处理后调用 syscall send 回复客户端)
 
-值得注意的是所有的 handle 都是按照单线程执行的 (IO multiplexing)
+对于单 reactor + 单线程的模型, accepter 与一般的 handler 都是顺序执行的, 不存在任何的线程安全性问题, 在 redis 中, handler 采用了多线程的方式处理 read, 但 handler 之间还是单线程的
+
+>   对于 redis 而言, 瓶颈出现在 IO 上而不是 CPU 上, 因此尽管是单线程的 handler, redis 的执行速度还是很快的
 
 ### multi-threaded
 
@@ -2085,13 +2094,15 @@ one reactor + multi thread
 
 在该模式下, 本质上还是使用线程池进行计算, 和 traditional model 相比, 可以在大量 request 下仍能够处理 client 请求, 但也就止于此了 (还是可能被恶意 request block 掉)
 
+单 reactor, 多线程的场景下, 一个 reactor 需要负责监听所有的连接/IO事件, 成为瓶颈
+
 ### primary-secondary threaded
 
 multi reactor + multi thread 
 
 ![](https://cdn.jsdelivr.net/gh/buzzxI/img@latest/img/24/06/24/21:40:05:primary_secondary_reactor_model.png)
 
-main reactor monitor connection event, sub reactor create handler to handle subsequent event
+想办法减轻 reactor 的负载, 构建主从 reactor 结构, 主 reactor 负责监听 accept 事件, 从 reactor 监听 IO 事件, 调用 handler 处理 IO 请求, 而所有的计算还是交给线程池处理
 
 
 
