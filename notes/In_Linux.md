@@ -244,6 +244,184 @@ $ autossh -M 0 -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" -N -R 2222
 *   `ServerAliveInterval 30`: 表示私网设备每 30 s 向外网 server 发送一个心跳包
 *   `ServerAliveCountMax 3`: 表示最多连续收不到 3 个心跳包, 超过了, 就重连
 
+## frp
+
+ssh reverse tunnel 确实可以实现 ssh 内网穿透, 不过很多情况下, 使用现有的开源库会更方便一点, 比如 [fatedier/frp: A fast reverse proxy to help you expose a local server behind a NAT or firewall to the internet.](https://github.com/fatedier/frp)
+
+官方给出的第一个示例就是基于 SSH 的, 基于 frp 实现内网穿透, 最简单的办法就是在内网设备上部署上一个 frp client, 在公网设备上部署上一个 frp server
+
+frp server 会将来自特定端口的流量转发给 frp client, 对于 SSH 而言, 会将流量转发到端口 22 上
+
+frp 的 release 文件十分简洁, 两个可执行文件 frpc (client) 与 frps (server), 还有两个可执行文件对应的配置文件 frpc.toml 与 frps.toml
+
+公网上的设备一共需要暴露两个端口, 一个端口用来和内网设备建立连接, 另一个端口用来承接需要访问内网设备的流量 (后面就说成 PC 了); 所以配置防火墙的时候注意要同时暴露两个端口
+
+```toml
+# frps.toml
+
+bindPort = 7000 
+```
+
+实际配置公网设备时, 只需要配置一个端口, 用来和内网设备建立连接, 而对于内网设备就需要额外的配置了
+
+```toml
+# frpc.toml
+
+serverAddr = "x.x.x.x" # 填写公网设备的域名或者写 ip
+serverPort = 7000 # 填写当时配置在公网设备上的监听地址
+
+[[proxies]]
+name = "ssh" # 随便一个名字
+type = "tcp" # ssh 基于 TCP
+localIP = "127.0.0.1"
+localPort = 22
+remotePort = 6000
+```
+
+要注意的时 localIP 与 localPort 配置的是, 需要公网设备将流量转发到哪个网卡接口 (localIP) 的哪个端口 (localPort) 上; 一般而言一个内网设备也就一个网卡, 写回环地址就行, 而至于端口号, 因为这里向暴露的是内网的 SSH 服务, 所以希望将流量转发到内网的 22 端口上
+
+而要注意 remotePort, 尽管这个配置是在 frp client 上配置的, 但其配置的其实是公网设备上的端口, 即所有去往公网设备 6000 的流量都会被 frp 转发到内网设备的端口 22 上
+
+完成上述配置后, 分别运行 frps 与 frpc 之后即可用 ssh 尝试一下内网穿透了
+
+```shell
+# 通过参数 -c 指定当前可执行文件的配置文件
+$ ./frps -c ./frps.toml
+```
+
+后续在使用 ssh 建立连接时需要指定端口号
+
+```shell
+# 通过 -o 配置额外参数, 因为这里只需要配置端口号, 所以其实等效于 -p
+# x.x.x.x 指代的是外网主机的域名/ ip 地址
+$ ssh -o P=6000 root@x.x.x.x
+```
+
+这个命令看起来像是向外网主机的 root 用户建立 ssh 连接, 但因为在外网设备上运行了 frps, 因此 frp 会将流量转发到内网, 完成内网穿透
+
+### one more thing
+
+*   开机自启动: 这个官方已经给出了完成示例 [使用 systemd | frp (gofrp.org)](https://gofrp.org/zh-cn/docs/setup/systemd/)
+
+*   使用 publicKey: 禁止使用密码登录 ssh 其实是一个好习惯, 即便使用了内网穿透也要保持, 开启 frp 之后, 对于外网的 PC 与内网设备而言, 建立 SSH 链接的过程不需要额外的参数配置, 所以还是和之前一样, 写一个 config 文件, 配置 publicKey 即可
+
+    ```shell
+     Host ssh_by_frp
+    	HostName x.x.x.x
+    	User root
+    	Port 6000
+    	PreferredAuthentications publickey
+    	IdentityFile=/path/to/key
+    ```
+
+    看起来和一般的 SSH 配置没什么区别, 最大的区别就在于现在指定了端口号为 6000, 而不是 22; 然后再进行内网穿透也更简单了
+
+    ```shell
+    $ ssh ssh_by_frp
+    ```
+
+*   点对点内网穿透: 这部分还没太研究清楚, 其主要优点是, 现在流量不会经过公网设备转发了, 而是直接从内网设备到外网 PC 了, 公网设备仅在建立连接的时候起到作用, 具体的还是参考官方文档: [点对点内网穿透 | frp (gofrp.org)](https://gofrp.org/zh-cn/docs/examples/xtcp/), [XTCP | frp (gofrp.org)](https://gofrp.org/zh-cn/docs/features/xtcp/), [安全地暴露内网服务 | frp (gofrp.org)](https://gofrp.org/zh-cn/docs/examples/stcp/)
+
+    公网设备的配置不变, 内网设备需要修改配置
+
+    ```toml
+    # frpc.toml
+    
+    serverAddr = "x.x.x.x"
+    serverPort = 7000
+    
+    [[proxies]]
+    name = "xtcp_ssh"
+    type = "xtcp"
+    # 只有共享密钥 (secretKey) 与服务器端一致的用户才能访问该服务
+    secretKey = "abcdefg"
+    localIP = "127.0.0.1"
+    localPort = 22
+    ```
+
+    为了实现点对点内网穿透的特性, 现在还需要在外网 PC 上也部署一个 frpc, 并进行如下配置
+
+    ```toml
+    serverAddr = "x.x.x.x"
+    serverPort = 7000
+    
+    [[visitors]]
+    name = "p2p_ssh_visitor"
+    type = "xtcp"
+    # 要访问的 P2P 代理的名称
+    serverName = "xtcp_ssh"
+    secretKey = "abcdefg"
+    # 绑定本地端口以访问 SSH 服务
+    bindAddr = "127.0.0.1"
+    bindPort = 6000
+    # 如果需要自动保持隧道打开，将其设置为 true
+    # keepTunnelOpen = false
+    ```
+
+    根据配置也不难猜到, p2p 内网穿透主要是两个 frpc 之间起到交互作用; 同时开启三个 frp 服务之后即可完成内网穿透
+
+    ```shell
+    $ ssh -oPort=6000 root@127.0.0.1
+    ```
+
+    注意到上述命令和之前的 ssh 转发命令最大的区别在于当前命令的 ip 地址是本机, 而不再是外网设备, 即外网 PC 去往 6000 的流量被本机的 frpc 转发给内网的 frpc
+
+*   兜底服务: 官方也承认了 xtcp 不一定会成功, 所以建议使用 stcp 进行兜底, 同时修改两个 frpc 的配置文件, 对于内网的设备分别配置一个 stcp 与一个 xtcp 服务
+
+    ```toml
+    # frpc.toml
+    
+    serverAddr = "x.x.x.x"
+    serverPort = 7000
+    
+    [[proxies]]
+    name = "xtcp_ssh"
+    type = "xtcp"
+    # 只有共享密钥 (secretKey) 与服务器端一致的用户才能访问该服务
+    secretKey = "abcdefg"
+    localIP = "127.0.0.1"
+    localPort = 22
+    
+    [[proxies]]
+    name = "stcp_ssh"
+    type = "stcp"
+    # 只有共享密钥 (secretKey) 与服务器端一致的用户才能访问该服务
+    secretKey = "abcdefg"
+    localIP = "127.0.0.1"
+    localPort = 22
+    ```
+
+    然后给外网 PC 配置上兜底服务
+
+    ```toml
+    # frpc.toml
+    
+    serverAddr = "x.x.x.x"
+    serverPort = 7000
+    
+    # xtcp config
+    [[visitors]]
+    name = "xtcp_visitor"
+    type = "xtcp"
+    serverName = "xtcp_ssh"
+    secretKey = "abcdefg"
+    bindAddr = "127.0.0.1"
+    bindPort = 6000
+    fallbackTo = "stcp_visitor"
+    fallbackTimeoutMs = 200
+    keepTunnelOpen = true
+    
+    # fallback to stcp
+    [[visitors]]
+    name = "stcp_visitor"
+    type = "stcp"
+    serverName = "stcp_ssh"
+    secretKey = "abcdefg"
+    bindPort = -1 
+    ```
+
+*   all-in-one: 要知道裸的基于 TCP 的 SSH 与后面两种基于 STCP/XTCP 的 SSH 并不冲突, 对于内网设备而言完全可以保留上述三种代理, 即保留基于外网中转的方案作为 STCP 的兜底方案 ...
+
 # 开启自启动
 
 比如启动 clash, 比如启用 ssh reverse tunnel
@@ -2478,6 +2656,8 @@ LBA1 保存了 GPT header, 记录分区表的大小和位置 (包括备份表的
 ## 引导程序
 
 设备通电开机之后, 并不会直接载入系统, 还需要使用引导程序作为驱动, 主流的可以分为 BIOS 和 UEFI
+
+
 
 
 
